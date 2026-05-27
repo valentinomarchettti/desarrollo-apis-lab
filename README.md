@@ -42,3 +42,8 @@ python manage.py runserver
 - `GET/PUT/PATCH/DELETE /api/pull-requests/{id}/`
 - `GET/POST /api/summaries/`
 - `GET/PUT/PATCH/DELETE /api/summaries/{id}/`
+
+## Endpoints GitHub
+
+- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera un summary tecnico del PR sin modificar GitHub.
+- `POST /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera el mismo summary tecnico, lo publica como descripcion del PR en GitHub y guarda el repositorio, pull request y summary en la API local.

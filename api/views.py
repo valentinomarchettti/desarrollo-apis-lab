@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 import requests
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.urls import reverse
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
@@ -105,6 +106,16 @@ def _github_get_json(access_token, url, params=None):
     return response, _github_response_data(response)
 
 
+def _github_patch_json(access_token, url, payload):
+    response = requests.patch(
+        url,
+        headers=_github_api_headers(access_token),
+        json=payload,
+        timeout=GITHUB_REQUEST_TIMEOUT_SECONDS,
+    )
+    return response, _github_response_data(response)
+
+
 def _github_get_paginated_json(access_token, url, params=None):
     results = []
     page = 1
@@ -150,6 +161,57 @@ def _github_error_response(error, github_response, github_data):
         },
         status=_github_error_status(github_response.status_code),
     )
+
+
+def _pull_request_estado_from_github(pull_data):
+    if pull_data.get("merged_at"):
+        return PullRequest.ESTADO_MERGED
+    return pull_data.get("state") or PullRequest.ESTADO_OPEN
+
+
+def _get_or_create_repository_from_github(owner, repo, pull_data):
+    local_repository = (
+        Repositorio.objects.filter(github_owner__iexact=owner, github_repo__iexact=repo)
+        .order_by("-activo", "id")
+        .first()
+    )
+    if local_repository:
+        return local_repository
+
+    github_repository = pull_data.get("base", {}).get("repo") or {}
+
+    return Repositorio.objects.create(
+        nombre=github_repository.get("name") or repo,
+        github_owner=owner,
+        github_repo=repo,
+        url=github_repository.get("html_url") or f"https://github.com/{owner}/{repo}",
+        descripcion=github_repository.get("description") or "",
+    )
+
+
+def _save_generated_summary(owner, repo, number, pull_data, summary):
+    local_repository = _get_or_create_repository_from_github(owner, repo, pull_data)
+    estado = _pull_request_estado_from_github(pull_data)
+
+    local_pull_request, _ = PullRequest.objects.update_or_create(
+        repositorio=local_repository,
+        numero=number,
+        defaults={
+            "titulo": (pull_data.get("title") or "")[:255],
+            "estado": estado,
+            "rama_origen": pull_data.get("head", {}).get("ref") or "",
+            "rama_destino": pull_data.get("base", {}).get("ref") or "",
+            "autor_github": pull_data.get("user", {}).get("login") or "",
+            "url": pull_data.get("html_url") or "",
+        },
+    )
+    local_summary = SummaryTecnico.objects.create(
+        pull_request=local_pull_request,
+        contenido=summary,
+        estado=SummaryTecnico.ESTADO_GENERATED,
+    )
+
+    return local_repository, local_pull_request, local_summary
 
 
 def _absolute_api_url(request, view_name, **kwargs):
@@ -398,9 +460,9 @@ def github_repositories(request):
     )
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 def github_pull_request_summary(request, owner, repo, number):
-    # Genera un summary tecnico directo desde el diff de GitHub sin guardar datos locales.
+    # GET genera un summary; POST ademas lo publica como descripcion del PR en GitHub.
     access_token = _get_bearer_token(request)
     if not access_token:
         return Response(
@@ -430,6 +492,25 @@ def github_pull_request_summary(request, owner, repo, number):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    pull_data = None
+    if request.method == "POST":
+        try:
+            pull_response, pull_data = _github_get_json(access_token, pull_detail_url)
+            if pull_response.status_code >= status.HTTP_400_BAD_REQUEST:
+                return _github_error_response(
+                    "GitHub no pudo devolver el detalle del pull request.",
+                    pull_response,
+                    pull_data,
+                )
+        except requests.RequestException as exc:
+            return Response(
+                {
+                    "error": "No se pudo conectar con GitHub para obtener el detalle del pull request.",
+                    "detail": str(exc),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
     summary, error = generar_descripcion_ia(diff_text)
     if error:
         return Response(
@@ -440,18 +521,86 @@ def github_pull_request_summary(request, owner, repo, number):
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    return Response(
-        {
-            "repositorio": {
-                "owner": owner,
-                "repo": repo,
-            },
-            "pull_request": {
-                "numero": number,
-            },
-            "summary_tecnico_ia": summary,
+    response_data = {
+        "repositorio": {
+            "owner": owner,
+            "repo": repo,
+        },
+        "pull_request": {
+            "numero": number,
+        },
+        "summary_tecnico_ia": summary,
+    }
+
+    if request.method == "POST":
+        try:
+            update_response, update_data = _github_patch_json(
+                access_token,
+                pull_detail_url,
+                {"body": summary},
+            )
+            if update_response.status_code >= status.HTTP_400_BAD_REQUEST:
+                return _github_error_response(
+                    "GitHub no pudo actualizar la descripcion del pull request.",
+                    update_response,
+                    update_data,
+                )
+        except requests.RequestException as exc:
+            return Response(
+                {
+                    "error": "No se pudo conectar con GitHub para actualizar la descripcion del pull request.",
+                    "detail": str(exc),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        try:
+            with transaction.atomic():
+                local_repository, local_pull_request, local_summary = _save_generated_summary(
+                    owner,
+                    repo,
+                    number,
+                    pull_data,
+                    summary,
+                )
+        except Exception as exc:
+            return Response(
+                {
+                    "error": "GitHub actualizo la descripcion del pull request, pero no se pudo guardar el summary en la API.",
+                    "detail": str(exc),
+                    "descripcion_actualizada_en_github": True,
+                    "github_response": {
+                        "id": update_data.get("id"),
+                        "number": update_data.get("number"),
+                        "title": update_data.get("title"),
+                        "body": update_data.get("body"),
+                        "html_url": update_data.get("html_url"),
+                        "updated_at": update_data.get("updated_at"),
+                    },
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        response_data["repositorio"]["repositorio_api_id"] = local_repository.id
+        response_data["pull_request"].update(
+            {
+                "descripcion_actualizada_en_github": True,
+                "html_url": update_data.get("html_url"),
+                "updated_at": update_data.get("updated_at"),
+                "pull_request_api_id": local_pull_request.id,
+            }
+        )
+        response_data["summary_tecnico_api_id"] = local_summary.id
+        response_data["github_response"] = {
+            "id": update_data.get("id"),
+            "number": update_data.get("number"),
+            "title": update_data.get("title"),
+            "body": update_data.get("body"),
+            "html_url": update_data.get("html_url"),
+            "updated_at": update_data.get("updated_at"),
         }
-    )
+
+    return Response(response_data)
 
 
 @api_view(["GET"])
