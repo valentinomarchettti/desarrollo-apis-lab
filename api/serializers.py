@@ -1,6 +1,15 @@
 from rest_framework import serializers
 
-from .models import PullRequest, Repositorio, SummaryTecnico
+from .models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
+
+
+class GitHubConnectionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GitHubConnection
+        fields = "__all__"
+        extra_kwargs = {
+            "access_token": {"write_only": True},
+        }
 
 
 class RepositorioSerializer(serializers.ModelSerializer):

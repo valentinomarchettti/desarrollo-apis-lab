@@ -1,10 +1,14 @@
+from collections import OrderedDict
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    GitHubConnectionViewSet,
     PullRequestViewSet,
     RepositorioViewSet,
     SummaryTecnicoViewSet,
+    github_connect,
     github_pull_request_detail,
     github_pull_request_summary,
     github_oauth_callback,
@@ -13,12 +17,25 @@ from .views import (
     github_repositories,
 )
 
-router = DefaultRouter()
+
+class ApiRootRouter(DefaultRouter):
+    def get_api_root_view(self, api_urls=None):
+        api_root_dict = OrderedDict()
+        api_root_dict["github-login"] = "github-connect"
+        for prefix, viewset, basename in self.registry:
+            api_root_dict[prefix] = self.routes[0].name.format(basename=basename)
+
+        return self.APIRootView.as_view(api_root_dict=api_root_dict)
+
+
+router = ApiRootRouter()
+router.register("github-connections", GitHubConnectionViewSet, basename="github-connection")
 router.register("repositorios", RepositorioViewSet, basename="repositorio")
 router.register("pull-requests", PullRequestViewSet, basename="pull-request")
 router.register("summaries", SummaryTecnicoViewSet, basename="summary-tecnico")
 
 urlpatterns = [
+    path("github/connect/", github_connect, name="github-connect"),
     path("github/oauth/link/", github_oauth_link, name="github-oauth-link"),
     path("github/oauth/callback/", github_oauth_callback, name="github-oauth-callback"),
     path("github/repositorios/", github_repositories, name="github-repositories"),
