@@ -9,6 +9,8 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from .gemini_service import generar_descripcion_ia
+
 from .models import PullRequest, Repositorio, SummaryTecnico
 from .serializers import (
     PullRequestSerializer,
@@ -544,16 +546,56 @@ def github_pull_request_detail(request, owner, repo, number):
         .order_by("-activo", "id")
         .first()
     )
+
     local_pull_request = None
+    summary_ia_contenido = "No se generó summary (El repositorio no está guardado en la API local)."
+
+    # TODO ESTE BLOQUE DEBE IR INDENTADO DENTRO DEL IF
     if local_repository:
-        local_pull_request = PullRequest.objects.filter(
+        merged_at = pull_data.get("merged_at")
+        github_state = pull_data.get("state")
+        estado = PullRequest.ESTADO_MERGED if merged_at else github_state
+
+        local_pull_request, created = PullRequest.objects.get_or_create(
             repositorio=local_repository,
             numero=number,
-        ).first()
+            defaults={
+                "titulo": pull_data.get("title", ""),
+                "estado": estado,  # <-- CORREGIDO: ahora usa 'estado'
+                "autor_github": pull_data.get("user", {}).get("login", ""),
+                "url": pull_data.get("html_url", ""),
+            }
+        )
 
-    merged_at = pull_data.get("merged_at")
-    github_state = pull_data.get("state")
-    estado = PullRequest.ESTADO_MERGED if merged_at else github_state
+        # 2. Lógica para procesar con Gemini e interactuar con el modelo SummaryTecnico
+        summary_existente = SummaryTecnico.objects.filter(pull_request=local_pull_request).first()
+
+        if summary_existente:
+            if summary_existente.estado == SummaryTecnico.ESTADO_GENERATED:
+                summary_ia_contenido = summary_existente.contenido
+            else:
+                summary_ia_contenido = f"El summary previo falló o quedó pendiente: {summary_existente.error_message}"
+        else:
+            # Si no existe, creamos un registro inicial en estado 'pending'
+            nuevo_summary = SummaryTecnico.objects.create(
+                pull_request=local_pull_request,
+                contenido="",
+                estado=SummaryTecnico.ESTADO_PENDING
+            )
+
+            # Mandamos el diff_text que nos bajamos de GitHub directo a Gemini
+            resultado_ia, error_ia = generar_descripcion_ia(diff_text)
+
+            if error_ia:
+                nuevo_summary.estado = SummaryTecnico.ESTADO_FAILED
+                nuevo_summary.error_message = error_ia
+                nuevo_summary.save()
+                summary_ia_contenido = f"Error al generar con Gemini: {error_ia}"
+            else:
+                nuevo_summary.contenido = resultado_ia
+                nuevo_summary.estado = SummaryTecnico.ESTADO_GENERATED
+                nuevo_summary.save()
+                summary_ia_contenido = resultado_ia
 
     files = [
         {
@@ -684,6 +726,7 @@ def github_pull_request_detail(request, owner, repo, number):
             "reviews": reviews,
             "comentarios_codigo": review_comments,
             "diff": diff_text,
+            "summary_tecnico_ia": summary_ia_contenido
         }
     )
 
