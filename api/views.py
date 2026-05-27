@@ -5,15 +5,18 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .gemini_service import generar_descripcion_ia
 
-from .models import PullRequest, Repositorio, SummaryTecnico
+from .models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
 from .serializers import (
+    GitHubConnectionSerializer,
     PullRequestSerializer,
     RepositorioSerializer,
     SummaryTecnicoSerializer,
@@ -71,14 +74,32 @@ def _github_api_headers(access_token):
     }
 
 
-def _get_bearer_token(request):
-    authorization = request.headers.get("Authorization", "")
-    prefix = "Bearer "
+def _active_github_connection():
+    return GitHubConnection.objects.filter(activo=True).order_by("-updated_at", "-id").first()
 
-    if not authorization.startswith(prefix):
-        return None
 
-    return authorization.removeprefix(prefix).strip()
+def _missing_github_connection_response():
+    return Response(
+        {
+            "error": "No hay una cuenta de GitHub conectada.",
+            "detail": "Conecta GitHub desde /api/github/connect/ antes de usar este endpoint.",
+        },
+        status=status.HTTP_401_UNAUTHORIZED,
+    )
+
+
+def _get_active_github_token():
+    connection = _active_github_connection()
+    if not connection:
+        return None, _missing_github_connection_response()
+
+    connection.last_used_at = timezone.now()
+    connection.save(update_fields=["last_used_at", "updated_at"])
+    return connection.access_token, None
+
+
+def _deactivate_active_github_connection():
+    GitHubConnection.objects.filter(activo=True).update(activo=False)
 
 
 def _github_response_data(response):
@@ -154,6 +175,9 @@ def _github_get_diff(access_token, url):
 
 
 def _github_error_response(error, github_response, github_data):
+    if github_response.status_code == status.HTTP_401_UNAUTHORIZED:
+        _deactivate_active_github_connection()
+
     return Response(
         {
             "error": error,
@@ -218,13 +242,7 @@ def _absolute_api_url(request, view_name, **kwargs):
     return request.build_absolute_uri(reverse(view_name, kwargs=kwargs))
 
 
-@api_view(["GET"])
-def github_oauth_link(request):
-    # Devuelve el link de autorizacion para iniciar OAuth con GitHub desde navegador o Postman.
-    settings_error = _github_settings_error()
-    if settings_error:
-        return settings_error
-
+def _build_github_authorization_url():
     # El state protege el flujo OAuth contra respuestas falsificadas o reutilizadas.
     state = secrets.token_urlsafe(32)
     cache.set(_github_state_cache_key(state), True, timeout=GITHUB_STATE_TTL_SECONDS)
@@ -237,6 +255,18 @@ def github_oauth_link(request):
     }
     authorization_url = f"{GITHUB_AUTHORIZE_URL}?{urlencode(query_params)}"
 
+    return authorization_url, state
+
+
+@api_view(["GET"])
+def github_oauth_link(request):
+    # Devuelve el link de autorizacion para iniciar OAuth con GitHub desde navegador o Postman.
+    settings_error = _github_settings_error()
+    if settings_error:
+        return settings_error
+
+    authorization_url, state = _build_github_authorization_url()
+
     return Response(
         {
             "authorization_url": authorization_url,
@@ -244,6 +274,17 @@ def github_oauth_link(request):
             "expires_in_seconds": GITHUB_STATE_TTL_SECONDS,
         }
     )
+
+
+@api_view(["GET"])
+def github_connect(request):
+    # Redirige directo a GitHub para que el usuario conecte la API en un solo paso.
+    settings_error = _github_settings_error(require_secret=True)
+    if settings_error:
+        return settings_error
+
+    authorization_url, _ = _build_github_authorization_url()
+    return redirect(authorization_url)
 
 
 @api_view(["GET"])
@@ -329,41 +370,63 @@ def github_oauth_callback(request):
             "login": user_data.get("login"),
             "html_url": user_data.get("html_url"),
         }
-        user_warning = None
     except requests.RequestException as exc:
-        github_user = None
-        user_warning = f"No se pudo consultar el usuario autenticado en GitHub: {exc}"
+        return Response(
+            {
+                "error": "No se pudo consultar el usuario autenticado en GitHub.",
+                "detail": str(exc),
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
     except ValueError:
-        github_user = None
-        user_warning = "GitHub devolvio una respuesta invalida al consultar el usuario autenticado."
+        return Response(
+            {"error": "GitHub devolvio una respuesta invalida al consultar el usuario autenticado."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    if not github_user["id"] or not github_user["login"]:
+        return Response(
+            {
+                "error": "GitHub devolvio datos de usuario incompletos.",
+                "github_response": user_data,
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    with transaction.atomic():
+        GitHubConnection.objects.exclude(github_user_id=github_user["id"]).update(activo=False)
+        connection, _ = GitHubConnection.objects.update_or_create(
+            github_user_id=github_user["id"],
+            defaults={
+                "github_login": github_user["login"],
+                "html_url": github_user["html_url"] or "",
+                "access_token": access_token,
+                "token_type": token_data.get("token_type") or "",
+                "scope": token_data.get("scope") or "",
+                "activo": True,
+                "connected_at": timezone.now(),
+            },
+        )
 
     response_data = {
-        "message": "Autenticacion con GitHub correcta.",
-        "access_token": access_token,
+        "message": "GitHub conectado correctamente.",
+        "connected": True,
+        "connection_id": connection.id,
         "token_type": token_data.get("token_type"),
         "scope": token_data.get("scope"),
         "github_user": github_user,
-        "warning": "Para laboratorio se devuelve el token. En produccion conviene guardarlo cifrado y no exponerlo.",
+        "warning": "El access_token quedo guardado en la API y no se expone en la respuesta.",
     }
-
-    if user_warning:
-        response_data["github_user_warning"] = user_warning
 
     return Response(response_data)
 
 
 @api_view(["GET"])
 def github_repositories(request):
-    # Lista repositorios de GitHub con el token OAuth y marca cuales estan linkeados a esta API.
-    access_token = _get_bearer_token(request)
-    if not access_token:
-        return Response(
-            {
-                "error": "Falta el access_token de GitHub.",
-                "detail": "Envia el header Authorization: Bearer <access_token>.",
-            },
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
+    # Lista repositorios de GitHub usando la conexion OAuth activa guardada en la API.
+    access_token, token_error = _get_active_github_token()
+    if token_error:
+        return token_error
 
     github_repositories_data = []
     page = 1
@@ -386,6 +449,8 @@ def github_repositories(request):
             github_data = _github_response_data(github_response)
 
             if github_response.status_code >= status.HTTP_400_BAD_REQUEST:
+                if github_response.status_code == status.HTTP_401_UNAUTHORIZED:
+                    _deactivate_active_github_connection()
                 return Response(
                     {
                         "error": "GitHub no pudo devolver los repositorios.",
@@ -463,15 +528,9 @@ def github_repositories(request):
 @api_view(["GET", "POST"])
 def github_pull_request_summary(request, owner, repo, number):
     # GET genera un summary; POST ademas lo publica como descripcion del PR en GitHub.
-    access_token = _get_bearer_token(request)
-    if not access_token:
-        return Response(
-            {
-                "error": "Falta el access_token de GitHub.",
-                "detail": "Envia el header Authorization: Bearer <access_token>.",
-            },
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
+    access_token, token_error = _get_active_github_token()
+    if token_error:
+        return token_error
 
     pull_detail_url = GITHUB_PULL_DETAIL_URL.format(owner=owner, repo=repo, number=number)
 
@@ -606,15 +665,9 @@ def github_pull_request_summary(request, owner, repo, number):
 @api_view(["GET"])
 def github_pull_request_detail(request, owner, repo, number):
     # Detalle completo de un PR: datos generales, diff, archivos, commits, comentarios y reviews.
-    access_token = _get_bearer_token(request)
-    if not access_token:
-        return Response(
-            {
-                "error": "Falta el access_token de GitHub.",
-                "detail": "Envia el header Authorization: Bearer <access_token>.",
-            },
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
+    access_token, token_error = _get_active_github_token()
+    if token_error:
+        return token_error
 
     pull_detail_url = GITHUB_PULL_DETAIL_URL.format(owner=owner, repo=repo, number=number)
     pull_files_url = GITHUB_PULL_FILES_URL.format(owner=owner, repo=repo, number=number)
@@ -937,16 +990,10 @@ def github_pull_request_detail(request, owner, repo, number):
 
 @api_view(["GET"])
 def github_repository_pull_requests(request, owner, repo):
-    # Lista pull requests de un repositorio de GitHub usando el token OAuth del usuario.
-    access_token = _get_bearer_token(request)
-    if not access_token:
-        return Response(
-            {
-                "error": "Falta el access_token de GitHub.",
-                "detail": "Envia el header Authorization: Bearer <access_token>.",
-            },
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
+    # Lista pull requests de un repositorio de GitHub usando la conexion OAuth activa.
+    access_token, token_error = _get_active_github_token()
+    if token_error:
+        return token_error
 
     state_filter = request.query_params.get("state", "all")
     allowed_states = {"open", "closed", "all"}
@@ -980,6 +1027,8 @@ def github_repository_pull_requests(request, owner, repo):
             github_data = _github_response_data(github_response)
 
             if github_response.status_code >= status.HTTP_400_BAD_REQUEST:
+                if github_response.status_code == status.HTTP_401_UNAUTHORIZED:
+                    _deactivate_active_github_connection()
                 return Response(
                     {
                         "error": "GitHub no pudo devolver los pull requests del repositorio.",
@@ -1078,6 +1127,11 @@ def github_repository_pull_requests(request, owner, repo):
 class RepositorioViewSet(viewsets.ModelViewSet):
     queryset = Repositorio.objects.all()
     serializer_class = RepositorioSerializer
+
+
+class GitHubConnectionViewSet(viewsets.ModelViewSet):
+    queryset = GitHubConnection.objects.all()
+    serializer_class = GitHubConnectionSerializer
 
 
 class PullRequestViewSet(viewsets.ModelViewSet):

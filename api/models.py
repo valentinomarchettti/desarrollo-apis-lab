@@ -1,4 +1,22 @@
 from django.db import models
+from django.utils import timezone
+
+
+class GitHubConnection(models.Model):
+    github_user_id = models.PositiveBigIntegerField(unique=True)
+    github_login = models.CharField(max_length=255)
+    html_url = models.URLField(blank=True)
+    access_token = models.TextField()
+    token_type = models.CharField(max_length=50, blank=True)
+    scope = models.CharField(max_length=255, blank=True)
+    activo = models.BooleanField(default=True)
+    connected_at = models.DateTimeField(default=timezone.now)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.github_login
 
 
 class Repositorio(models.Model):

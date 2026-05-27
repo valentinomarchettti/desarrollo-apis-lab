@@ -1,21 +1,163 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase
-from rest_framework.test import APIRequestFactory
+from django.core.cache import cache
+from django.test import TestCase, override_settings
+from rest_framework.test import APIClient, APIRequestFactory
 
-from .models import PullRequest, Repositorio, SummaryTecnico
-from .views import github_pull_request_detail, github_pull_request_summary
+from .models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
+from .views import github_connect, github_oauth_callback, github_pull_request_detail, github_pull_request_summary
+
+
+class GithubConnectionOAuthTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    @override_settings(
+        GITHUB_CLIENT_ID="client-id",
+        GITHUB_CLIENT_SECRET="client-secret",
+        GITHUB_CALLBACK_URL="http://127.0.0.1:8000/api/github/oauth/callback/",
+    )
+    def test_connect_redirects_to_github_authorization_url(self):
+        request = self.factory.get("/api/github/connect/")
+
+        response = github_connect(request)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("https://github.com/login/oauth/authorize", response["Location"])
+        self.assertIn("client_id=client-id", response["Location"])
+        self.assertIn("redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2Fapi%2Fgithub%2Foauth%2Fcallback%2F", response["Location"])
+        self.assertIn("scope=repo+read%3Auser+user%3Aemail", response["Location"])
+        self.assertIn("state=", response["Location"])
+
+    def test_api_root_includes_github_login_link(self):
+        client = APIClient()
+
+        response = client.get("/api/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("github-login", response.data)
+        self.assertTrue(response.data["github-login"].endswith("/api/github/connect/"))
+
+    @override_settings(
+        GITHUB_CLIENT_ID="client-id",
+        GITHUB_CLIENT_SECRET="client-secret",
+        GITHUB_CALLBACK_URL="http://127.0.0.1:8000/api/github/oauth/callback/",
+    )
+    def test_callback_creates_active_connection_without_exposing_token(self):
+        cache.set("github_oauth_state:state-ok", True, timeout=600)
+        request = self.factory.get(
+            "/api/github/oauth/callback/",
+            {"code": "code-ok", "state": "state-ok"},
+        )
+        token_response = SimpleNamespace(
+            json=lambda: {
+                "access_token": "new-token",
+                "token_type": "bearer",
+                "scope": "repo,read:user,user:email",
+            }
+        )
+        user_response = SimpleNamespace(
+            json=lambda: {
+                "id": 123,
+                "login": "octocat",
+                "html_url": "https://github.com/octocat",
+            },
+            raise_for_status=lambda: None,
+        )
+
+        with (
+            patch("api.views.requests.post", return_value=token_response),
+            patch("api.views.requests.get", return_value=user_response),
+        ):
+            response = github_oauth_callback(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["connected"])
+        self.assertNotIn("access_token", response.data)
+
+        connection = GitHubConnection.objects.get()
+        self.assertTrue(connection.activo)
+        self.assertEqual(connection.github_user_id, 123)
+        self.assertEqual(connection.github_login, "octocat")
+        self.assertEqual(connection.access_token, "new-token")
+
+    @override_settings(
+        GITHUB_CLIENT_ID="client-id",
+        GITHUB_CLIENT_SECRET="client-secret",
+        GITHUB_CALLBACK_URL="http://127.0.0.1:8000/api/github/oauth/callback/",
+    )
+    def test_callback_reconnect_deactivates_previous_connection(self):
+        previous = GitHubConnection.objects.create(
+            github_user_id=99,
+            github_login="previous",
+            access_token="old-token",
+        )
+        cache.set("github_oauth_state:state-ok", True, timeout=600)
+        request = self.factory.get(
+            "/api/github/oauth/callback/",
+            {"code": "code-ok", "state": "state-ok"},
+        )
+        token_response = SimpleNamespace(
+            json=lambda: {
+                "access_token": "new-token",
+                "token_type": "bearer",
+                "scope": "repo",
+            }
+        )
+        user_response = SimpleNamespace(
+            json=lambda: {
+                "id": 123,
+                "login": "octocat",
+                "html_url": "https://github.com/octocat",
+            },
+            raise_for_status=lambda: None,
+        )
+
+        with (
+            patch("api.views.requests.post", return_value=token_response),
+            patch("api.views.requests.get", return_value=user_response),
+        ):
+            response = github_oauth_callback(request)
+
+        self.assertEqual(response.status_code, 200)
+        previous.refresh_from_db()
+        self.assertFalse(previous.activo)
+        self.assertTrue(GitHubConnection.objects.get(github_user_id=123).activo)
+
+    def test_github_connection_viewset_does_not_return_access_token(self):
+        GitHubConnection.objects.create(
+            github_user_id=123,
+            github_login="octocat",
+            html_url="https://github.com/octocat",
+            access_token="secret-token",
+            token_type="bearer",
+            scope="repo",
+        )
+        client = APIClient()
+
+        response = client.get("/api/github-connections/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["github_login"], "octocat")
+        self.assertNotIn("access_token", response.data[0])
 
 
 class GithubPullRequestDetailTests(TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.connection = GitHubConnection.objects.create(
+            github_user_id=123,
+            github_login="octocat",
+            html_url="https://github.com/octocat",
+            access_token="github-token",
+            token_type="bearer",
+            scope="repo read:user user:email",
+        )
 
     def _request_detail(self):
         request = self.factory.get(
             "/api/github/repositorios/owner/repo/pull-requests/1/",
-            HTTP_AUTHORIZATION="Bearer github-token",
         )
         return github_pull_request_detail(request, "owner", "repo", 1)
 
@@ -26,7 +168,6 @@ class GithubPullRequestDetailTests(TestCase):
             request_path,
             data={},
             format="json",
-            HTTP_AUTHORIZATION="Bearer github-token",
         )
         return github_pull_request_summary(request, "owner", "repo", 1)
 
@@ -82,6 +223,14 @@ class GithubPullRequestDetailTests(TestCase):
             ),
             "diff": patch("api.views._github_get_diff", return_value=(ok_response, "diff text")),
         }
+
+    def test_detail_without_active_connection_returns_401(self):
+        GitHubConnection.objects.all().delete()
+
+        response = self._request_detail()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data["error"], "No hay una cuenta de GitHub conectada.")
 
     def test_detail_without_local_repository_returns_pr_state(self):
         mocks = self._mock_github(state="closed")
