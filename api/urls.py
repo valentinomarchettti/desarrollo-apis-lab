@@ -6,6 +6,7 @@ from .views import (
     RepositorioViewSet,
     SummaryTecnicoViewSet,
     github_pull_request_detail,
+    github_pull_request_summary,
     github_oauth_callback,
     github_oauth_link,
     github_repository_pull_requests,
@@ -30,6 +31,11 @@ urlpatterns = [
         "github/repositorios/<str:owner>/<str:repo>/pull-requests/<int:number>/",
         github_pull_request_detail,
         name="github-pull-request-detail",
+    ),
+    path(
+        "github/repositorios/<str:owner>/<str:repo>/pull-requests/<int:number>/summary/",
+        github_pull_request_summary,
+        name="github-pull-request-summary",
     ),
     path("", include(router.urls)),
 ]

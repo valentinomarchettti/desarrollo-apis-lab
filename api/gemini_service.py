@@ -3,6 +3,9 @@ from google import genai
 from google.genai import types
 
 
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+
+
 def generar_descripcion_ia(diff_text):
     """
     Toma el texto del Git Diff de GitHub y solicita a Gemini
@@ -20,7 +23,7 @@ def generar_descripcion_ia(diff_text):
 
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model=os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
             contents=f"Por favor, analiza este Diff de Git y genera la descripción:\n\n{diff_text}",
             config=types.GenerateContentConfig(
                 system_instruction=prompt_sistema,

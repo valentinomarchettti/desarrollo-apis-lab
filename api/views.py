@@ -399,6 +399,62 @@ def github_repositories(request):
 
 
 @api_view(["GET"])
+def github_pull_request_summary(request, owner, repo, number):
+    # Genera un summary tecnico directo desde el diff de GitHub sin guardar datos locales.
+    access_token = _get_bearer_token(request)
+    if not access_token:
+        return Response(
+            {
+                "error": "Falta el access_token de GitHub.",
+                "detail": "Envia el header Authorization: Bearer <access_token>.",
+            },
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    pull_detail_url = GITHUB_PULL_DETAIL_URL.format(owner=owner, repo=repo, number=number)
+
+    try:
+        diff_response, diff_text = _github_get_diff(access_token, pull_detail_url)
+        if diff_response.status_code >= status.HTTP_400_BAD_REQUEST:
+            return _github_error_response(
+                "GitHub no pudo devolver el diff del pull request.",
+                diff_response,
+                _github_response_data(diff_response),
+            )
+    except requests.RequestException as exc:
+        return Response(
+            {
+                "error": "No se pudo conectar con GitHub para obtener el diff del pull request.",
+                "detail": str(exc),
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    summary, error = generar_descripcion_ia(diff_text)
+    if error:
+        return Response(
+            {
+                "error": "No se pudo generar el summary tecnico con Gemini.",
+                "detail": error,
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return Response(
+        {
+            "repositorio": {
+                "owner": owner,
+                "repo": repo,
+            },
+            "pull_request": {
+                "numero": number,
+            },
+            "summary_tecnico_ia": summary,
+        }
+    )
+
+
+@api_view(["GET"])
 def github_pull_request_detail(request, owner, repo, number):
     # Detalle completo de un PR: datos generales, diff, archivos, commits, comentarios y reviews.
     access_token = _get_bearer_token(request)
@@ -547,15 +603,14 @@ def github_pull_request_detail(request, owner, repo, number):
         .first()
     )
 
+    merged_at = pull_data.get("merged_at")
+    github_state = pull_data.get("state")
+    estado = PullRequest.ESTADO_MERGED if merged_at else github_state
+
     local_pull_request = None
     summary_ia_contenido = "No se generó summary (El repositorio no está guardado en la API local)."
 
-    # TODO ESTE BLOQUE DEBE IR INDENTADO DENTRO DEL IF
     if local_repository:
-        merged_at = pull_data.get("merged_at")
-        github_state = pull_data.get("state")
-        estado = PullRequest.ESTADO_MERGED if merged_at else github_state
-
         local_pull_request, created = PullRequest.objects.get_or_create(
             repositorio=local_repository,
             numero=number,
