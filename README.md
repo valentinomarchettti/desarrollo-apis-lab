@@ -1,15 +1,56 @@
-# pr_summary_api
+# API de Revisión Técnica de Pull Requests
 
-API base para un laboratorio de Desarrollo de APIs, enfocada en gestionar repositorios, pull requests y summaries tecnicos.
+API Django REST para conectar una cuenta de GitHub, consultar repositorios y pull requests, generar summaries tecnicos con Gemini y, cuando corresponde, publicar esos summaries como descripcion del pull request en GitHub.
+
+La API mantiene una base local con repositorios, pull requests y un historial de summaries generados. GitHub sigue siendo la fuente principal para los datos remotos; la base local se usa para seguimiento, permisos e historial.
+
+## Alcance de la API
+
+Esta API permite:
+
+- Autenticar usuarios propios de la API con JWT.
+- Administrar roles locales: `Administrador`, `Reviewer` y `Auditor`.
+- Conectar una cuenta de GitHub mediante OAuth.
+- Usar la conexion activa de GitHub para listar repositorios y pull requests.
+- Consultar el detalle tecnico de un pull request, incluyendo archivos, commits, comentarios, reviews, comentarios de codigo y diff.
+- Generar summaries tecnicos con Gemini a partir del diff de un pull request.
+- Publicar un summary generado como descripcion del pull request en GitHub.
+- Guardar repositorios, pull requests y summaries en la base local.
+
+Esta API no reemplaza a GitHub ni administra ramas, commits, merges, reviewers o labels. La unica escritura directa sobre GitHub implementada actualmente es la actualizacion de la descripcion del pull request con un summary generado.
 
 ## Modelos principales
 
+- `GitHubConnection`
 - `Repositorio`
 - `PullRequest`
 - `SummaryTecnico`
 
+### `GitHubConnection`
+
+Representa la conexion OAuth activa con GitHub. Guarda el usuario conectado, el token de acceso, scopes, estado activo y fechas de conexion/uso.
+
+El token se guarda en backend para poder consultar GitHub, pero no se devuelve en las respuestas del serializer.
+
+### `Repositorio`
+
+Representa un repositorio de GitHub guardado en la API local. Incluye owner, nombre del repositorio, URL, descripcion y si el seguimiento esta activo.
+
+### `PullRequest`
+
+Representa un pull request guardado localmente para un repositorio. Incluye numero, titulo, estado (`open`, `closed` o `merged`), ramas, autor y URL.
+
+Cada pull request es unico por combinacion de repositorio y numero.
+
+### `SummaryTecnico`
+
+Representa un summary generado para un pull request. Guarda el contenido, estado (`pending`, `generated` o `failed`) y mensaje de error cuando falla la generacion.
+
+Un pull request puede tener varios summaries, lo que permite conservar historial.
+
 ## Relaciones entre modelos
 
+- `GitHubConnection` no pertenece a un repositorio: funciona como credencial activa para consultar GitHub.
 - Un `Repositorio` tiene muchos `PullRequest`.
 - Un `PullRequest` pertenece a un `Repositorio`.
 - Un `PullRequest` tiene muchos `SummaryTecnico`.
@@ -23,6 +64,19 @@ python -m pip install -r requirements.txt
 
 ## Configuracion inicial del proyecto
 
+Copiar `.env.example` como `.env` y completar las variables de entorno:
+
+```env
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_CALLBACK_URL=http://127.0.0.1:8000/api/github/oauth/callback/
+
+GOOGLE_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+`GEMINI_MODEL` es opcional. Si no se define, la API intenta usar los modelos configurados en `api/gemini_service.py`.
+
 ```bash
 python manage.py migrate
 python manage.py createsuperuser
@@ -33,10 +87,19 @@ python manage.py runserver
 El comando `seed_roles` crea o actualiza los grupos `Administrador`, `Reviewer` y `Auditor`.
 Como `db.sqlite3` no se versiona, cada persona que clone el proyecto debe ejecutar ese comando despues de las migraciones.
 
+## Flujo de uso
+
+1. Crear usuarios locales desde el admin de Django.
+2. Asignar a cada usuario un grupo: `Administrador`, `Reviewer` o `Auditor`.
+3. Obtener un token JWT con `/api/auth/token/`.
+4. Con un usuario `Administrador`, conectar GitHub desde `/api/github/connect/` o pedir el link OAuth en `/api/github/oauth/link/`.
+5. Usar los endpoints de GitHub para listar repositorios, listar pull requests o consultar el detalle de un pull request.
+6. Generar un summary tecnico con `GET /summary/` o generarlo y publicarlo en GitHub con `POST /summary/`.
+
 ## Roles y permisos
 
-- `Administrador`: puede administrar todos los modelos de la app, conectar GitHub, generar summaries y publicarlos en GitHub.
-- `Reviewer`: puede ver repositorios y pull requests, generar summaries y publicar summaries como descripcion del pull request en GitHub. No puede conectar GitHub.
+- `Administrador`: puede administrar conexiones de GitHub, repositorios, pull requests y summaries. Tambien puede conectar GitHub, generar summaries y publicarlos en GitHub.
+- `Reviewer`: puede ver repositorios, pull requests y summaries, generar summaries y publicar summaries como descripcion del pull request en GitHub. No puede conectar GitHub, administrar conexiones ni crear/modificar repositorios o pull requests locales.
 - `Auditor`: puede ver repositorios, pull requests y summaries ya generados. No puede crear, modificar, publicar ni conectar GitHub.
 
 Para asignar roles:
@@ -76,16 +139,16 @@ Content-Type: application/json
 }
 ```
 
-## Endpoints iniciales
+## Endpoints CRUD locales
 
-- `GET/POST /api/github-connections/`
-- `GET/PUT/PATCH/DELETE /api/github-connections/{id}/`
-- `GET/POST /api/repositorios/`
-- `GET/PUT/PATCH/DELETE /api/repositorios/{id}/`
-- `GET/POST /api/pull-requests/`
-- `GET/PUT/PATCH/DELETE /api/pull-requests/{id}/`
-- `GET/POST /api/summaries/`
-- `GET/PUT/PATCH/DELETE /api/summaries/{id}/`
+- `GET/POST /api/github-connections/`: administracion local de conexiones OAuth. Requiere rol `Administrador`.
+- `GET/PUT/PATCH/DELETE /api/github-connections/{id}/`: administracion local de una conexion OAuth. Requiere rol `Administrador`.
+- `GET/POST /api/repositorios/`: listado para todos los roles; creacion solo para `Administrador`.
+- `GET/PUT/PATCH/DELETE /api/repositorios/{id}/`: lectura para todos los roles; modificacion y eliminacion solo para `Administrador`.
+- `GET/POST /api/pull-requests/`: listado para todos los roles; creacion solo para `Administrador`.
+- `GET/PUT/PATCH/DELETE /api/pull-requests/{id}/`: lectura para todos los roles; modificacion y eliminacion solo para `Administrador`.
+- `GET/POST /api/summaries/`: listado para todos los roles; creacion para `Administrador` o `Reviewer`.
+- `GET/PUT/PATCH/DELETE /api/summaries/{id}/`: lectura para todos los roles; modificacion para `Administrador` o `Reviewer`; eliminacion solo para `Administrador`.
 
 ## Endpoints GitHub
 
@@ -93,10 +156,13 @@ Content-Type: application/json
 - `GET /api/github/oauth/callback/`: callback OAuth de GitHub; guarda o actualiza la `GitHubConnection` activa.
 - `GET /api/github/oauth/link/`: devuelve el link OAuth como JSON para pruebas manuales. Requiere rol `Administrador`.
 - `GET /api/github/repositorios/`: lista repositorios usando la `GitHubConnection` activa.
-- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/`: lista pull requests usando la `GitHubConnection` activa.
+- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/?state=all`: lista pull requests usando la `GitHubConnection` activa. El parametro `state` puede ser `open`, `closed` o `all`.
+- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/`: devuelve el detalle completo del pull request, incluyendo datos generales, archivos modificados, commits, comentarios, reviews, comentarios de codigo, diff y summary tecnico generado por IA cuando corresponde.
 - `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera un summary tecnico del PR sin modificar GitHub. Requiere rol `Reviewer` o `Administrador`.
 - `POST /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera el mismo summary tecnico, lo publica como descripcion del PR en GitHub y guarda el repositorio, pull request y summary en la API local. Requiere rol `Reviewer` o `Administrador`.
 
 Los endpoints GitHub usan automaticamente la conexion activa guardada en `GitHubConnection`, pero igualmente requieren JWT de un usuario autorizado de la API. La excepcion es el callback OAuth, porque GitHub redirige al backend sin header `Authorization`.
+
+El endpoint de detalle de pull request puede consultar GitHub aunque el repositorio no exista en la base local. Si el repositorio ya esta guardado localmente, la API puede asociar el pull request y reutilizar o generar un `SummaryTecnico`.
 
 En la pantalla principal de la API (`/api/`) tambien aparece `github-login`, que apunta a `/api/github/connect/`.
