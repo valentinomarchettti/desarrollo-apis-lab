@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from .clients import github as github_client
 from .gemini_service import generar_descripcion_ia
-from .models import PullRequest, SummaryTecnico
+from .models import PullRequest
 from .permissions import CanUseSummaryEndpoint, CanViewPullRequests
 from .services.github_connections import get_active_github_token
 from .services.github_persistence import get_local_repository, save_generated_summary
@@ -18,52 +18,6 @@ from .services.github_presenters import (
     build_reviews,
 )
 from .services.github_responses import github_error_response, paginated_or_error
-
-
-def _generate_or_reuse_local_summary(local_repository, number, pull_data, estado, diff_text):
-    local_pull_request = None
-    summary_content = "No se generó summary (El repositorio no está guardado en la API local)."
-
-    if not local_repository:
-        return local_pull_request, summary_content
-
-    local_pull_request, _ = PullRequest.objects.get_or_create(
-        repositorio=local_repository,
-        numero=number,
-        defaults={
-            "titulo": pull_data.get("title", ""),
-            "estado": estado,
-            "autor_github": pull_data.get("user", {}).get("login", ""),
-            "url": pull_data.get("html_url", ""),
-        },
-    )
-
-    summary_existente = SummaryTecnico.objects.filter(pull_request=local_pull_request).first()
-    if summary_existente:
-        if summary_existente.estado == SummaryTecnico.ESTADO_GENERATED:
-            return local_pull_request, summary_existente.contenido
-        return (
-            local_pull_request,
-            f"El summary previo falló o quedó pendiente: {summary_existente.error_message}",
-        )
-
-    nuevo_summary = SummaryTecnico.objects.create(
-        pull_request=local_pull_request,
-        contenido="",
-        estado=SummaryTecnico.ESTADO_PENDING,
-    )
-    resultado_ia, error_ia = generar_descripcion_ia(diff_text)
-
-    if error_ia:
-        nuevo_summary.estado = SummaryTecnico.ESTADO_FAILED
-        nuevo_summary.error_message = error_ia
-        nuevo_summary.save()
-        return local_pull_request, f"Error al generar con Gemini: {error_ia}"
-
-    nuevo_summary.contenido = resultado_ia
-    nuevo_summary.estado = SummaryTecnico.ESTADO_GENERATED
-    nuevo_summary.save()
-    return local_pull_request, resultado_ia
 
 
 @api_view(["GET", "POST"])
@@ -297,16 +251,16 @@ def github_pull_request_detail(request, owner, repo, number):
         )
 
     local_repository = get_local_repository(owner, repo)
+    local_pull_request = None
+    if local_repository:
+        local_pull_request = PullRequest.objects.filter(
+            repositorio=local_repository,
+            numero=number,
+        ).first()
+
     merged_at = pull_data.get("merged_at")
     github_state = pull_data.get("state")
     estado = PullRequest.ESTADO_MERGED if merged_at else github_state
-    local_pull_request, summary_ia_contenido = _generate_or_reuse_local_summary(
-        local_repository,
-        number,
-        pull_data,
-        estado,
-        diff_text,
-    )
 
     return Response(
         {
@@ -362,6 +316,5 @@ def github_pull_request_detail(request, owner, repo, number):
             "reviews": build_reviews(reviews_data),
             "comentarios_codigo": build_review_comments(review_comments_data),
             "diff": diff_text,
-            "summary_tecnico_ia": summary_ia_contenido,
         }
     )
