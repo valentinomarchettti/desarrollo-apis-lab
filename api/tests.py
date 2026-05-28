@@ -1,17 +1,41 @@
 from types import SimpleNamespace
+from io import StringIO
 from unittest.mock import patch
 
+from django.contrib.auth.models import Group, Permission, User
+from django.core.management import call_command
 from django.core.cache import cache
 from django.test import TestCase, override_settings
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework import status
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from .models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
 from .views import github_connect, github_oauth_callback, github_pull_request_detail, github_pull_request_summary
 
 
+def create_user_with_permissions(username, permission_codenames):
+    user = User.objects.create_user(username=username, password="pass12345")
+    permissions = Permission.objects.filter(
+        content_type__app_label="api",
+        codename__in=permission_codenames,
+    )
+    user.user_permissions.set(permissions)
+    return user
+
+
+def create_user_in_group(username, group_name):
+    user = User.objects.create_user(username=username, password="pass12345")
+    user.groups.add(Group.objects.get(name=group_name))
+    return user
+
+
 class GithubConnectionOAuthTests(TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.github_admin = create_user_with_permissions(
+            "github-admin",
+            {"connect_github", "view_githubconnection"},
+        )
 
     @override_settings(
         GITHUB_CLIENT_ID="client-id",
@@ -20,6 +44,7 @@ class GithubConnectionOAuthTests(TestCase):
     )
     def test_connect_redirects_to_github_authorization_url(self):
         request = self.factory.get("/api/github/connect/")
+        force_authenticate(request, user=self.github_admin)
 
         response = github_connect(request)
 
@@ -32,6 +57,7 @@ class GithubConnectionOAuthTests(TestCase):
 
     def test_api_root_includes_github_login_link(self):
         client = APIClient()
+        client.force_authenticate(user=self.github_admin)
 
         response = client.get("/api/")
 
@@ -135,6 +161,7 @@ class GithubConnectionOAuthTests(TestCase):
             scope="repo",
         )
         client = APIClient()
+        client.force_authenticate(user=self.github_admin)
 
         response = client.get("/api/github-connections/")
 
@@ -146,6 +173,14 @@ class GithubConnectionOAuthTests(TestCase):
 class GithubPullRequestDetailTests(TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
+        self.github_reviewer = create_user_with_permissions(
+            "github-reviewer",
+            {
+                "view_pullrequest",
+                "generate_summary",
+                "publish_summary_github",
+            },
+        )
         self.connection = GitHubConnection.objects.create(
             github_user_id=123,
             github_login="octocat",
@@ -159,6 +194,7 @@ class GithubPullRequestDetailTests(TestCase):
         request = self.factory.get(
             "/api/github/repositorios/owner/repo/pull-requests/1/",
         )
+        force_authenticate(request, user=self.github_reviewer)
         return github_pull_request_detail(request, "owner", "repo", 1)
 
     def _request_summary(self, method="get"):
@@ -169,6 +205,7 @@ class GithubPullRequestDetailTests(TestCase):
             data={},
             format="json",
         )
+        force_authenticate(request, user=self.github_reviewer)
         return github_pull_request_summary(request, "owner", "repo", 1)
 
     def _github_pull_data(self, merged_at=None, state="open"):
@@ -448,3 +485,202 @@ class GithubPullRequestDetailTests(TestCase):
         self.assertEqual(Repositorio.objects.count(), 0)
         self.assertEqual(PullRequest.objects.count(), 0)
         self.assertEqual(SummaryTecnico.objects.count(), 0)
+
+
+class SeedRolesCommandTests(TestCase):
+    def test_seed_roles_creates_expected_groups_and_permissions(self):
+        call_command("seed_roles", stdout=StringIO())
+
+        self.assertTrue(Group.objects.filter(name="Administrador").exists())
+        self.assertTrue(Group.objects.filter(name="Reviewer").exists())
+        self.assertTrue(Group.objects.filter(name="Auditor").exists())
+
+        admin_permissions = set(
+            Group.objects.get(name="Administrador").permissions.values_list("codename", flat=True)
+        )
+        reviewer_permissions = set(
+            Group.objects.get(name="Reviewer").permissions.values_list("codename", flat=True)
+        )
+        auditor_permissions = set(
+            Group.objects.get(name="Auditor").permissions.values_list("codename", flat=True)
+        )
+
+        self.assertIn("connect_github", admin_permissions)
+        self.assertIn("generate_summary", admin_permissions)
+        self.assertIn("publish_summary_github", admin_permissions)
+        self.assertEqual(
+            reviewer_permissions,
+            {
+                "view_repositorio",
+                "view_pullrequest",
+                "view_summarytecnico",
+                "add_summarytecnico",
+                "change_summarytecnico",
+                "generate_summary",
+                "publish_summary_github",
+            },
+        )
+        self.assertEqual(
+            auditor_permissions,
+            {
+                "view_repositorio",
+                "view_pullrequest",
+                "view_summarytecnico",
+            },
+        )
+
+    def test_seed_roles_is_idempotent(self):
+        call_command("seed_roles", stdout=StringIO())
+        call_command("seed_roles", stdout=StringIO())
+
+        self.assertEqual(Group.objects.filter(name="Administrador").count(), 1)
+        self.assertEqual(Group.objects.filter(name="Reviewer").count(), 1)
+        self.assertEqual(Group.objects.filter(name="Auditor").count(), 1)
+
+
+class RolePermissionEndpointTests(TestCase):
+    def setUp(self):
+        call_command("seed_roles", stdout=StringIO())
+        self.client = APIClient()
+
+    def test_token_endpoint_returns_jwt_pair(self):
+        User.objects.create_user(username="token-user", password="pass12345")
+
+        response = self.client.post(
+            "/api/auth/token/",
+            {"username": "token-user", "password": "pass12345"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+    def test_unauthenticated_user_receives_401(self):
+        response = self.client.get("/api/repositorios/")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_authenticated_user_without_model_permission_gets_descriptive_message(self):
+        user = User.objects.create_user(username="without-permissions", password="pass12345")
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get("/api/summaries/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            str(response.data["detail"]),
+            "No tenes permiso para ver summaries tecnicos. "
+            "Necesitas el rol Administrador, Reviewer o Auditor.",
+        )
+        self.assertNotIn("api.view_summarytecnico", str(response.data["detail"]))
+
+    def test_github_connection_permission_message_uses_roles(self):
+        reviewer = create_user_in_group("connection-reviewer", "Reviewer")
+        self.client.force_authenticate(user=reviewer)
+
+        response = self.client.get("/api/github-connections/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            str(response.data["detail"]),
+            "No tenes permiso para ver las conexiones de GitHub. "
+            "Necesitas el rol Administrador.",
+        )
+        self.assertNotIn("api.view_githubconnection", str(response.data["detail"]))
+        self.assertNotIn("git hub connections", str(response.data["detail"]).lower())
+
+    def test_auditor_can_read_summaries_but_cannot_publish(self):
+        auditor = create_user_in_group("auditor", "Auditor")
+        self.client.force_authenticate(user=auditor)
+
+        read_response = self.client.get("/api/summaries/")
+        publish_response = self.client.post(
+            "/api/github/repositorios/owner/repo/pull-requests/1/summary/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(read_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(publish_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn(
+            "No tenes permiso para publicar summaries en GitHub",
+            str(publish_response.data["detail"]),
+        )
+        self.assertIn("Necesitas el rol Administrador o Reviewer", str(publish_response.data["detail"]))
+        self.assertNotIn("api.publish_summary_github", str(publish_response.data["detail"]))
+
+    def test_reviewer_can_publish_summary_but_cannot_connect_github(self):
+        reviewer = create_user_in_group("reviewer", "Reviewer")
+        self.client.force_authenticate(user=reviewer)
+        GitHubConnection.objects.create(
+            github_user_id=123,
+            github_login="octocat",
+            html_url="https://github.com/octocat",
+            access_token="github-token",
+            token_type="bearer",
+            scope="repo read:user user:email",
+        )
+        ok_response = SimpleNamespace(status_code=200)
+        pull_data = {
+            "number": 1,
+            "title": "Test PR",
+            "state": "open",
+            "merged_at": None,
+            "head": {"ref": "feature"},
+            "base": {
+                "ref": "main",
+                "repo": {
+                    "name": "repo",
+                    "html_url": "https://github.com/owner/repo",
+                    "description": "Repository description",
+                },
+            },
+            "user": {"login": "octocat"},
+            "html_url": "https://github.com/owner/repo/pull/1",
+        }
+        updated_pull_request = {
+            "id": 123,
+            "number": 1,
+            "title": "Test PR",
+            "body": "Generated summary",
+            "html_url": "https://github.com/owner/repo/pull/1",
+            "updated_at": "2026-05-01T00:05:00Z",
+        }
+
+        with (
+            patch("api.views._github_get_diff", return_value=(ok_response, "diff text")),
+            patch("api.views._github_get_json", return_value=(ok_response, pull_data)),
+            patch("api.views.generar_descripcion_ia", return_value=("Generated summary", None)),
+            patch("api.views._github_patch_json", return_value=(ok_response, updated_pull_request)),
+        ):
+            publish_response = self.client.post(
+                "/api/github/repositorios/owner/repo/pull-requests/1/summary/",
+                {},
+                format="json",
+            )
+        connect_response = self.client.get("/api/github/connect/")
+
+        self.assertEqual(publish_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(publish_response.data["pull_request"]["descripcion_actualizada_en_github"])
+        self.assertEqual(connect_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn(
+            "No tenes permiso para conectar GitHub",
+            str(connect_response.data["detail"]),
+        )
+        self.assertIn("Necesitas el rol Administrador", str(connect_response.data["detail"]))
+        self.assertNotIn("api.connect_github", str(connect_response.data["detail"]))
+
+    @override_settings(
+        GITHUB_CLIENT_ID="client-id",
+        GITHUB_CLIENT_SECRET="client-secret",
+        GITHUB_CALLBACK_URL="http://127.0.0.1:8000/api/github/oauth/callback/",
+    )
+    def test_admin_can_connect_github(self):
+        admin = create_user_in_group("admin", "Administrador")
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get("/api/github/connect/")
+
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("https://github.com/login/oauth/authorize", response["Location"])

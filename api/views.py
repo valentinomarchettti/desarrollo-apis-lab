@@ -9,12 +9,20 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .gemini_service import generar_descripcion_ia
 
 from .models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
+from .permissions import (
+    CanConnectGitHub,
+    CanUseSummaryEndpoint,
+    CanViewPullRequests,
+    CanViewRepositorios,
+    ViewDjangoModelPermissions,
+)
 from .serializers import (
     GitHubConnectionSerializer,
     PullRequestSerializer,
@@ -259,6 +267,7 @@ def _build_github_authorization_url():
 
 
 @api_view(["GET"])
+@permission_classes([CanConnectGitHub])
 def github_oauth_link(request):
     # Devuelve el link de autorizacion para iniciar OAuth con GitHub desde navegador o Postman.
     settings_error = _github_settings_error()
@@ -277,6 +286,7 @@ def github_oauth_link(request):
 
 
 @api_view(["GET"])
+@permission_classes([CanConnectGitHub])
 def github_connect(request):
     # Redirige directo a GitHub para que el usuario conecte la API en un solo paso.
     settings_error = _github_settings_error(require_secret=True)
@@ -288,6 +298,7 @@ def github_connect(request):
 
 
 @api_view(["GET"])
+@permission_classes([AllowAny])
 def github_oauth_callback(request):
     # GitHub redirige aca con code y state; el backend intercambia el code por un access_token.
     settings_error = _github_settings_error(require_secret=True)
@@ -422,6 +433,7 @@ def github_oauth_callback(request):
 
 
 @api_view(["GET"])
+@permission_classes([CanViewRepositorios])
 def github_repositories(request):
     # Lista repositorios de GitHub usando la conexion OAuth activa guardada en la API.
     access_token, token_error = _get_active_github_token()
@@ -526,6 +538,7 @@ def github_repositories(request):
 
 
 @api_view(["GET", "POST"])
+@permission_classes([CanUseSummaryEndpoint])
 def github_pull_request_summary(request, owner, repo, number):
     # GET genera un summary; POST ademas lo publica como descripcion del PR en GitHub.
     access_token, token_error = _get_active_github_token()
@@ -663,6 +676,7 @@ def github_pull_request_summary(request, owner, repo, number):
 
 
 @api_view(["GET"])
+@permission_classes([CanViewPullRequests])
 def github_pull_request_detail(request, owner, repo, number):
     # Detalle completo de un PR: datos generales, diff, archivos, commits, comentarios y reviews.
     access_token, token_error = _get_active_github_token()
@@ -989,6 +1003,7 @@ def github_pull_request_detail(request, owner, repo, number):
 
 
 @api_view(["GET"])
+@permission_classes([CanViewPullRequests])
 def github_repository_pull_requests(request, owner, repo):
     # Lista pull requests de un repositorio de GitHub usando la conexion OAuth activa.
     access_token, token_error = _get_active_github_token()
@@ -1127,18 +1142,22 @@ def github_repository_pull_requests(request, owner, repo):
 class RepositorioViewSet(viewsets.ModelViewSet):
     queryset = Repositorio.objects.all()
     serializer_class = RepositorioSerializer
+    permission_classes = [ViewDjangoModelPermissions]
 
 
 class GitHubConnectionViewSet(viewsets.ModelViewSet):
     queryset = GitHubConnection.objects.all()
     serializer_class = GitHubConnectionSerializer
+    permission_classes = [ViewDjangoModelPermissions]
 
 
 class PullRequestViewSet(viewsets.ModelViewSet):
     queryset = PullRequest.objects.all()
     serializer_class = PullRequestSerializer
+    permission_classes = [ViewDjangoModelPermissions]
 
 
 class SummaryTecnicoViewSet(viewsets.ModelViewSet):
     queryset = SummaryTecnico.objects.all()
     serializer_class = SummaryTecnicoSerializer
+    permission_classes = [ViewDjangoModelPermissions]

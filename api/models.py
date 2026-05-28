@@ -15,6 +15,11 @@ class GitHubConnection(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        permissions = [
+            ("connect_github", "Puede conectar GitHub"),
+        ]
+
     def __str__(self):
         return self.github_login
 
@@ -92,6 +97,12 @@ class SummaryTecnico(models.Model):
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        permissions = [
+            ("generate_summary", "Puede generar summaries tecnicos"),
+            ("publish_summary_github", "Puede publicar summaries en GitHub"),
+        ]
 
     def __str__(self):
         return f"Summary {self.id} for PR #{self.pull_request.numero}"
