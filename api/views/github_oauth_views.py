@@ -7,14 +7,20 @@ from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import redirect
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from .clients import github as github_client
-from .models import GitHubConnection
-from .permissions import CanConnectGitHub
+from api.clients import github as github_client
+from api.models import GitHubConnection
+from api.openapi import (
+    ErrorResponseSerializer,
+    OAuthCallbackResponseSerializer,
+    OAuthLinkResponseSerializer,
+)
+from api.permissions import CanConnectGitHub
 
 
 def _github_state_cache_key(state):
@@ -63,6 +69,22 @@ def _build_github_authorization_url():
     return authorization_url, state
 
 
+@extend_schema(
+    tags=["GitHub OAuth"],
+    summary="Obtener URL de autorización de GitHub",
+    description=(
+        "Genera una URL de autorización de GitHub y un `state` temporal. Es útil "
+        "cuando querés iniciar el flujo OAuth desde un cliente API o una interfaz "
+        "propia, sin redirigir automáticamente desde el backend. Requiere un usuario "
+        "local con permiso para conectar GitHub."
+    ),
+    responses={
+        status.HTTP_200_OK: OAuthLinkResponseSerializer,
+        status.HTTP_401_UNAUTHORIZED: ErrorResponseSerializer,
+        status.HTTP_403_FORBIDDEN: ErrorResponseSerializer,
+        status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorResponseSerializer,
+    },
+)
 @api_view(["GET"])
 @permission_classes([CanConnectGitHub])
 def github_oauth_link(request):
@@ -81,6 +103,20 @@ def github_oauth_link(request):
     )
 
 
+@extend_schema(
+    tags=["GitHub OAuth"],
+    summary="Redirigir a GitHub OAuth",
+    description=(
+        "Inicia el flujo OAuth redirigiendo el navegador a GitHub. Después de aceptar "
+        "los permisos, GitHub vuelve al callback configurado en `GITHUB_CALLBACK_URL`."
+    ),
+    responses={
+        status.HTTP_302_FOUND: OpenApiResponse(description="Redirección a GitHub."),
+        status.HTTP_401_UNAUTHORIZED: ErrorResponseSerializer,
+        status.HTTP_403_FORBIDDEN: ErrorResponseSerializer,
+        status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorResponseSerializer,
+    },
+)
 @api_view(["GET"])
 @permission_classes([CanConnectGitHub])
 def github_connect(request):
@@ -92,6 +128,38 @@ def github_connect(request):
     return redirect(authorization_url)
 
 
+@extend_schema(
+    tags=["GitHub OAuth"],
+    summary="Callback OAuth de GitHub",
+    description=(
+        "Recibe `code` y `state` desde GitHub, valida que el `state` sea vigente, "
+        "intercambia el código por un `access_token` y guarda la conexión activa. "
+        "Este endpoint es público porque GitHub llama al backend sin JWT."
+    ),
+    auth=[],
+    parameters=[
+        OpenApiParameter(
+            name="code",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=True,
+            description="Código temporal enviado por GitHub después de autorizar la aplicación.",
+        ),
+        OpenApiParameter(
+            name="state",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=True,
+            description="Valor `state` generado al iniciar el flujo OAuth.",
+        ),
+    ],
+    responses={
+        status.HTTP_200_OK: OAuthCallbackResponseSerializer,
+        status.HTTP_400_BAD_REQUEST: ErrorResponseSerializer,
+        status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorResponseSerializer,
+        status.HTTP_502_BAD_GATEWAY: ErrorResponseSerializer,
+    },
+)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def github_oauth_callback(request):
@@ -104,20 +172,20 @@ def github_oauth_callback(request):
 
     if not code:
         return Response(
-            {"error": "Falta el parametro code enviado por GitHub."},
+            {"error": "Falta el parámetro code enviado por GitHub."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     if not state_value:
         return Response(
-            {"error": "Falta el parametro state enviado por GitHub."},
+            {"error": "Falta el parámetro state enviado por GitHub."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     state_cache_key = _github_state_cache_key(state_value)
     if not cache.get(state_cache_key):
         return Response(
-            {"error": "El state es invalido o expiro. Inicia nuevamente el flujo OAuth."},
+            {"error": "El state es inválido o expiró. Iniciá nuevamente el flujo OAuth."},
             status=status.HTTP_400_BAD_REQUEST,
         )
     cache.delete(state_cache_key)
@@ -147,7 +215,7 @@ def github_oauth_callback(request):
         )
     except ValueError:
         return Response(
-            {"error": "GitHub devolvio una respuesta invalida al solicitar el access_token."},
+            {"error": "GitHub devolvió una respuesta inválida al solicitar el access_token."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -155,7 +223,7 @@ def github_oauth_callback(request):
     if not access_token:
         return Response(
             {
-                "error": "GitHub no devolvio access_token.",
+                "error": "GitHub no devolvió access_token.",
                 "github_response": token_data,
             },
             status=status.HTTP_400_BAD_REQUEST,
@@ -184,14 +252,14 @@ def github_oauth_callback(request):
         )
     except ValueError:
         return Response(
-            {"error": "GitHub devolvio una respuesta invalida al consultar el usuario autenticado."},
+            {"error": "GitHub devolvió una respuesta inválida al consultar el usuario autenticado."},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
     if not github_user["id"] or not github_user["login"]:
         return Response(
             {
-                "error": "GitHub devolvio datos de usuario incompletos.",
+                "error": "GitHub devolvió datos de usuario incompletos.",
                 "github_response": user_data,
             },
             status=status.HTTP_502_BAD_GATEWAY,
@@ -220,6 +288,6 @@ def github_oauth_callback(request):
             "token_type": token_data.get("token_type"),
             "scope": token_data.get("scope"),
             "github_user": github_user,
-            "warning": "El access_token quedo guardado en la API y no se expone en la respuesta.",
+            "warning": "El access_token quedó guardado en la API y no se expone en la respuesta.",
         }
     )

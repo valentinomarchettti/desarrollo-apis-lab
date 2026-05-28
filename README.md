@@ -87,6 +87,20 @@ python manage.py runserver
 El comando `seed_roles` crea o actualiza los grupos `Administrador`, `Reviewer` y `Auditor`.
 Como `db.sqlite3` no se versiona, cada persona que clone el proyecto debe ejecutar ese comando despues de las migraciones.
 
+## Documentacion OpenAPI / ReDoc
+
+La API expone documentacion generada con `drf-spectacular`:
+
+- `GET /api/schema/`: schema OpenAPI en formato YAML.
+- `GET /api/docs/`: documentacion visual ReDoc.
+- `GET /docs/redoc/`: alias de ReDoc para acceso directo desde el navegador.
+
+ReDoc muestra la autenticacion JWT como Bearer Auth. Para probar los endpoints protegidos, primero obtener un token en `/api/auth/token/` y enviar:
+
+```http
+Authorization: Bearer <access_token>
+```
+
 ## Flujo de uso
 
 1. Crear usuarios locales desde el admin de Django.

@@ -1,20 +1,43 @@
 import requests
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from .clients import github as github_client
-from .permissions import CanViewPullRequests, CanViewRepositorios
-from .services.github_connections import get_active_github_token
-from .services.github_persistence import (
+from api.clients import github as github_client
+from api.openapi import (
+    ErrorResponseSerializer,
+    GitHubPullRequestListResponseSerializer,
+    GitHubRepositoryListResponseSerializer,
+)
+from api.permissions import CanViewPullRequests, CanViewRepositorios
+from api.services.github_connections import get_active_github_token
+from api.services.github_persistence import (
     get_linked_repositories_by_key,
     get_local_pull_requests_by_number,
     get_local_repository,
 )
-from .services.github_presenters import build_pull_request_list, build_repository_list
-from .services.github_responses import paginated_or_error
+from api.services.github_presenters import build_pull_request_list, build_repository_list
+from api.services.github_responses import paginated_or_error
 
 
+@extend_schema(
+    tags=["GitHub Repositorios"],
+    summary="Listar repositorios de GitHub",
+    description=(
+        "Consulta GitHub con la conexión OAuth activa y devuelve los repositorios "
+        "visibles para esa cuenta. Cada repositorio incluye datos remotos y una marca "
+        "que indica si ya está guardado en la base local de la API, para saber si "
+        "tiene seguimiento activado."
+    ),
+    responses={
+        status.HTTP_200_OK: GitHubRepositoryListResponseSerializer,
+        status.HTTP_400_BAD_REQUEST: ErrorResponseSerializer,
+        status.HTTP_401_UNAUTHORIZED: ErrorResponseSerializer,
+        status.HTTP_403_FORBIDDEN: ErrorResponseSerializer,
+        status.HTTP_502_BAD_GATEWAY: ErrorResponseSerializer,
+    },
+)
 @api_view(["GET"])
 @permission_classes([CanViewRepositorios])
 def github_repositories(request):
@@ -27,7 +50,7 @@ def github_repositories(request):
             access_token,
             github_client.REPOS_URL,
             "GitHub no pudo devolver los repositorios.",
-            "GitHub devolvio una respuesta inesperada al listar repositorios.",
+            "GitHub devolvió una respuesta inesperada al listar repositorios.",
             params={
                 "affiliation": "owner,collaborator,organization_member",
                 "visibility": "all",
@@ -61,6 +84,46 @@ def github_repositories(request):
     )
 
 
+@extend_schema(
+    tags=["GitHub Pull Requests"],
+    operation_id="github_repository_pull_requests_list",
+    summary="Listar pull requests de un repositorio",
+    description=(
+        "Consulta los pull requests de un repositorio remoto usando la conexión "
+        "activa de GitHub. El filtro `state` permite traer PRs abiertos, cerrados "
+        "o todos. La respuesta también indica si cada PR ya existe como registro "
+        "local en la API."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name="owner",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.PATH,
+            description="Owner u organización del repositorio en GitHub.",
+        ),
+        OpenApiParameter(
+            name="repo",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.PATH,
+            description="Nombre del repositorio en GitHub.",
+        ),
+        OpenApiParameter(
+            name="state",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            enum=["open", "closed", "all"],
+            required=False,
+            description="Estado de los pull requests a consultar. Por defecto: `all`.",
+        ),
+    ],
+    responses={
+        status.HTTP_200_OK: GitHubPullRequestListResponseSerializer,
+        status.HTTP_400_BAD_REQUEST: ErrorResponseSerializer,
+        status.HTTP_401_UNAUTHORIZED: ErrorResponseSerializer,
+        status.HTTP_403_FORBIDDEN: ErrorResponseSerializer,
+        status.HTTP_502_BAD_GATEWAY: ErrorResponseSerializer,
+    },
+)
 @api_view(["GET"])
 @permission_classes([CanViewPullRequests])
 def github_repository_pull_requests(request, owner, repo):
@@ -73,8 +136,8 @@ def github_repository_pull_requests(request, owner, repo):
     if state_filter not in allowed_states:
         return Response(
             {
-                "error": "El parametro state es invalido.",
-                "detail": "Usa uno de estos valores: open, closed, all.",
+                "error": "El parámetro state es inválido.",
+                "detail": "Usá uno de estos valores: open, closed, all.",
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -86,7 +149,7 @@ def github_repository_pull_requests(request, owner, repo):
             access_token,
             github_pulls_url,
             "GitHub no pudo devolver los pull requests del repositorio.",
-            "GitHub devolvio una respuesta inesperada al listar pull requests.",
+            "GitHub devolvió una respuesta inesperada al listar pull requests.",
             params={
                 "state": state_filter,
                 "sort": "created",

@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'drf_spectacular',
     'rest_framework',
     'api',
 ]
@@ -133,6 +134,93 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "API de Revisión Técnica de Pull Requests",
+    "DESCRIPTION": (
+        "API Django REST para autenticar usuarios con JWT, conectar una cuenta "
+        "de GitHub por OAuth, consultar repositorios y pull requests, generar "
+        "resúmenes técnicos con Gemini y publicar esos resúmenes en GitHub."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": r"/api/",
+    "ENUM_NAME_OVERRIDES": {
+        "PullRequestEstadoEnum": "api.models.PullRequest.ESTADO_CHOICES",
+        "SummaryTecnicoEstadoEnum": "api.models.SummaryTecnico.ESTADO_CHOICES",
+        "GitHubPullRequestStateFilterEnum": ["open", "closed", "all"],
+    },
+    "SERVERS": [
+        {
+            "url": "http://127.0.0.1:8000",
+            "description": "Servidor de desarrollo local",
+        },
+    ],
+    "TAGS": [
+        {
+            "name": "Autenticación",
+            "description": (
+                "Endpoints para obtener y renovar tokens JWT. Usá el token `access` "
+                "en el header `Authorization: Bearer <access_token>` para consumir "
+                "los endpoints protegidos."
+            ),
+        },
+        {
+            "name": "GitHub OAuth",
+            "description": (
+                "Flujo de autorización para vincular una cuenta de GitHub con la API. "
+                "La conexión resultante se guarda localmente y queda disponible para "
+                "consultar repositorios y pull requests."
+            ),
+        },
+        {
+            "name": "GitHub Repositorios",
+            "description": (
+                "Consulta repositorios remotos visibles para la cuenta de GitHub conectada. "
+                "Estos endpoints leen datos desde GitHub y los comparan con los repositorios "
+                "guardados localmente."
+            ),
+        },
+        {
+            "name": "GitHub Pull Requests",
+            "description": (
+                "Consulta pull requests remotos, detalle técnico, archivos, commits, "
+                "comentarios, reviews, diff y generación de resúmenes técnicos con IA."
+            ),
+        },
+        {
+            "name": "Conexiones GitHub locales",
+            "description": (
+                "Credenciales OAuth guardadas por la API para consultar GitHub. En uso normal "
+                "se crean desde el flujo OAuth y no manualmente."
+            ),
+        },
+        {
+            "name": "Repositorios locales",
+            "description": (
+                "Repositorios de GitHub registrados en la base local para seguimiento y "
+                "relación con pull requests y resúmenes."
+            ),
+        },
+        {
+            "name": "Pull Requests locales",
+            "description": (
+                "Pull requests guardados localmente como referencia interna. No reemplazan "
+                "ni modifican el pull request remoto en GitHub."
+            ),
+        },
+        {
+            "name": "Resúmenes técnicos locales",
+            "description": (
+                "Historial local de resúmenes técnicos generados para pull requests. La "
+                "generación con IA se realiza desde el endpoint remoto de resumen."
+            ),
+        },
+    ],
 }
 
 SIMPLE_JWT = {

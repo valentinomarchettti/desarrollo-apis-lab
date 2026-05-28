@@ -3,20 +3,20 @@ from collections import OrderedDict
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .github_oauth_views import (
+from api.views.github_oauth_views import (
     github_connect,
     github_oauth_callback,
     github_oauth_link,
 )
-from .github_pull_request_views import (
+from api.views.github_pull_request_views import (
     github_pull_request_detail,
     github_pull_request_summary,
 )
-from .github_repository_views import (
+from api.views.github_repository_views import (
     github_repository_pull_requests,
     github_repositories,
 )
-from .viewsets import (
+from api.views.viewsets import (
     GitHubConnectionViewSet,
     PullRequestViewSet,
     RepositorioViewSet,
