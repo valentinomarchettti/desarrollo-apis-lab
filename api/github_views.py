@@ -1,25 +1,19 @@
-from .github_views import (
+from .github_oauth_views import (
     github_connect,
     github_oauth_callback,
     github_oauth_link,
+)
+from .github_pull_request_views import (
     github_pull_request_detail,
     github_pull_request_summary,
+)
+from .github_repository_views import (
     github_repositories,
     github_repository_pull_requests,
-)
-from .viewsets import (
-    GitHubConnectionViewSet,
-    PullRequestViewSet,
-    RepositorioViewSet,
-    SummaryTecnicoViewSet,
 )
 
 
 __all__ = [
-    "GitHubConnectionViewSet",
-    "PullRequestViewSet",
-    "RepositorioViewSet",
-    "SummaryTecnicoViewSet",
     "github_connect",
     "github_oauth_callback",
     "github_oauth_link",
