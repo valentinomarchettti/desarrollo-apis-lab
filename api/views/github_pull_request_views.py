@@ -24,6 +24,7 @@ from api.services.github_presenters import (
     build_reviews,
 )
 from api.services.github_responses import github_error_response, paginated_or_error
+from api.services.pull_request_metrics import build_pull_request_metrics
 
 
 PULL_REQUEST_PATH_PARAMETERS = [
@@ -48,14 +49,42 @@ PULL_REQUEST_PATH_PARAMETERS = [
 ]
 
 
+def _fetch_commit_details(access_token, owner, repo, commits_data):
+    commit_details = []
+
+    for commit_data in commits_data:
+        sha = commit_data.get("sha")
+        if not sha:
+            continue
+
+        try:
+            commit_response, commit_detail = github_client.get_commit_detail(
+                access_token,
+                owner,
+                repo,
+                sha,
+            )
+        except requests.RequestException:
+            continue
+
+        if (
+            commit_response.status_code < status.HTTP_400_BAD_REQUEST
+            and isinstance(commit_detail, dict)
+        ):
+            commit_details.append(commit_detail)
+
+    return commit_details
+
+
 @extend_schema(
     methods=["GET"],
     tags=["GitHub Pull Requests"],
     summary="Generar resumen técnico de un pull request",
     description=(
-        "Obtiene el diff del pull request desde GitHub y genera un resumen técnico "
-        "con Gemini. Este método no modifica el pull request remoto ni guarda el "
-        "resultado en la base local; sirve para previsualizar el contenido generado."
+        "Obtiene el diff, detalle, archivos y commits del pull request desde GitHub. "
+        "Con esa informacion calcula metricas tecnicas del PR y genera un resumen "
+        "con Gemini que explica que se hizo, como se trabajo y que volumen tuvo el cambio. "
+        "Este metodo no modifica el pull request remoto ni guarda el resultado en la base local."
     ),
     parameters=PULL_REQUEST_PATH_PARAMETERS,
     responses={
@@ -71,9 +100,9 @@ PULL_REQUEST_PATH_PARAMETERS = [
     tags=["GitHub Pull Requests"],
     summary="Generar y publicar resumen técnico",
     description=(
-        "Genera un resumen técnico con Gemini, lo publica como descripción del pull "
-        "request en GitHub y guarda el repositorio, el pull request y el resumen en "
-        "la base local. Usalo cuando ya querés dejar el resumen publicado."
+        "Genera un resumen tecnico enriquecido con metricas calculadas desde GitHub, "
+        "lo publica como descripcion del pull request y guarda el repositorio, el pull "
+        "request y el resumen en la base local. Usalo cuando ya queres dejar el resumen publicado."
     ),
     parameters=PULL_REQUEST_PATH_PARAMETERS,
     request=None,
@@ -94,8 +123,36 @@ def github_pull_request_summary(request, owner, repo, number):
         return token_error
 
     pull_detail_url = github_client.PULL_DETAIL_URL.format(owner=owner, repo=repo, number=number)
+    pull_files_url = github_client.PULL_FILES_URL.format(owner=owner, repo=repo, number=number)
+    pull_commits_url = github_client.PULL_COMMITS_URL.format(owner=owner, repo=repo, number=number)
 
     try:
+        pull_response, pull_data = github_client.get_json(access_token, pull_detail_url)
+        if pull_response.status_code >= status.HTTP_400_BAD_REQUEST:
+            return github_error_response(
+                "GitHub no pudo devolver el detalle del pull request.",
+                pull_response,
+                pull_data,
+            )
+
+        files_data, error_response = paginated_or_error(
+            access_token,
+            pull_files_url,
+            "GitHub no pudo devolver los archivos modificados del pull request.",
+            "GitHub devolvio una respuesta inesperada al listar archivos del pull request.",
+        )
+        if error_response:
+            return error_response
+
+        commits_data, error_response = paginated_or_error(
+            access_token,
+            pull_commits_url,
+            "GitHub no pudo devolver los commits del pull request.",
+            "GitHub devolvio una respuesta inesperada al listar commits del pull request.",
+        )
+        if error_response:
+            return error_response
+
         diff_response, diff_text = github_client.get_diff(access_token, pull_detail_url)
         if diff_response.status_code >= status.HTTP_400_BAD_REQUEST:
             return github_error_response(
@@ -106,32 +163,21 @@ def github_pull_request_summary(request, owner, repo, number):
     except requests.RequestException as exc:
         return Response(
             {
-                "error": "No se pudo conectar con GitHub para obtener el diff del pull request.",
+                "error": "No se pudo conectar con GitHub para obtener la informacion del pull request.",
                 "detail": str(exc),
             },
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    pull_data = None
-    if request.method == "POST":
-        try:
-            pull_response, pull_data = github_client.get_json(access_token, pull_detail_url)
-            if pull_response.status_code >= status.HTTP_400_BAD_REQUEST:
-                return github_error_response(
-                    "GitHub no pudo devolver el detalle del pull request.",
-                    pull_response,
-                    pull_data,
-                )
-        except requests.RequestException as exc:
-            return Response(
-                {
-                    "error": "No se pudo conectar con GitHub para obtener el detalle del pull request.",
-                    "detail": str(exc),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+    commit_details = _fetch_commit_details(access_token, owner, repo, commits_data)
+    metricas_pr = build_pull_request_metrics(
+        pull_data,
+        files_data,
+        commits_data,
+        commit_details,
+    )
 
-    summary, error = generar_descripcion_ia(diff_text)
+    summary, error = generar_descripcion_ia(diff_text, metricas_pr)
     if error:
         return Response(
             {
@@ -150,6 +196,7 @@ def github_pull_request_summary(request, owner, repo, number):
             "numero": number,
         },
         "summary_tecnico_ia": summary,
+        "metricas_pr": metricas_pr,
     }
 
     if request.method == "POST":

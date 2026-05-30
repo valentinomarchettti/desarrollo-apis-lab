@@ -13,9 +13,11 @@ Esta API permite:
 - Conectar una cuenta de GitHub mediante OAuth.
 - Usar la conexion activa de GitHub para listar repositorios y pull requests.
 - Consultar el detalle tecnico de un pull request, incluyendo archivos, commits, comentarios, reviews, comentarios de codigo y diff.
-- Generar summaries tecnicos con Gemini a partir del diff de un pull request.
+- Generar summaries tecnicos con Gemini a partir del diff de un pull request y metricas calculadas desde GitHub.
 - Publicar un summary generado como descripcion del pull request en GitHub.
 - Guardar repositorios, pull requests y summaries en la base local.
+
+Para que el summary no sea solamente una lista de cambios, la API tambien calcula informacion util del PR: ramas involucradas, cantidad de archivos, lineas agregadas y eliminadas, autor del PR, autores de commits, dias con actividad y autores que tocaron archivos de test. Esa informacion se usa como contexto para que Gemini pueda explicar mejor que se hizo y como se trabajo.
 
 Esta API no reemplaza a GitHub ni administra ramas, commits, merges, reviewers o labels. La unica escritura directa sobre GitHub implementada actualmente es la actualizacion de la descripcion del pull request con un summary generado.
 
@@ -108,7 +110,7 @@ Authorization: Bearer <access_token>
 3. Obtener un token JWT con `/api/auth/token/`.
 4. Con un usuario `Administrador`, conectar GitHub desde `/api/github/connect/` o pedir el link OAuth en `/api/github/oauth/link/`.
 5. Usar los endpoints de GitHub para listar repositorios, listar pull requests o consultar el detalle de un pull request.
-6. Generar un summary tecnico con `GET /summary/` o generarlo y publicarlo en GitHub con `POST /summary/`.
+6. Generar un summary tecnico con `GET /summary/` o generarlo y publicarlo en GitHub con `POST /summary/`. En ambos casos la respuesta incluye `metricas_pr`, con los calculos que la API usa para enriquecer la descripcion generada.
 
 ## Roles y permisos
 
@@ -172,8 +174,20 @@ Content-Type: application/json
 - `GET /api/github/repositorios/`: lista repositorios usando la `GitHubConnection` activa.
 - `GET /api/github/repositorios/{owner}/{repo}/pull-requests/?state=all`: lista pull requests usando la `GitHubConnection` activa. El parametro `state` puede ser `open`, `closed` o `all`.
 - `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/`: devuelve el detalle completo del pull request, incluyendo datos generales, archivos modificados, commits, comentarios, reviews, comentarios de codigo, diff y summary tecnico generado por IA cuando corresponde.
-- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera un summary tecnico del PR sin modificar GitHub. Requiere rol `Reviewer` o `Administrador`.
-- `POST /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera el mismo summary tecnico, lo publica como descripcion del PR en GitHub y guarda el repositorio, pull request y summary en la API local. Requiere rol `Reviewer` o `Administrador`.
+- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera un summary tecnico del PR sin modificar GitHub. Ademas del diff, consulta detalle, archivos y commits para devolver `metricas_pr`. Requiere rol `Reviewer` o `Administrador`.
+- `POST /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera el mismo summary tecnico enriquecido con `metricas_pr`, lo publica como descripcion del PR en GitHub y guarda el repositorio, pull request y summary en la API local. Requiere rol `Reviewer` o `Administrador`.
+
+### Metricas calculadas del Pull Request
+
+El campo `metricas_pr` resume calculos propios de la API para que el resumen tecnico tenga mas contexto:
+
+- `ramas`: rama de origen y rama destino del PR.
+- `archivos`: total de archivos modificados, archivos de test detectados y cantidad de tests modificados.
+- `lineas`: lineas agregadas, eliminadas y balance neto del cambio.
+- `actividad`: primer commit, ultimo commit, dias calendario entre ambos y dias concretos con commits.
+- `autoria`: autor principal del PR, autores de commits y autores que tocaron archivos de test.
+
+Estas metricas ayudan a explicar no solo que cambio, sino tambien como se trabajo: cuanto volumen tuvo el PR, quienes participaron y en que dias hubo actividad.
 
 Los endpoints GitHub usan automaticamente la conexion activa guardada en `GitHubConnection`, pero igualmente requieren JWT de un usuario autorizado de la API. La excepcion es el callback OAuth, porque GitHub redirige al backend sin header `Authorization`.
 
