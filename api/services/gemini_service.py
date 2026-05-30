@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from google import genai
@@ -10,7 +11,35 @@ MODELOS_PREFERIDOS = [
     "gemini-2.5-flash-lite"
 ]
 
-def generar_descripcion_ia(diff_text):
+
+def _build_summary_prompt():
+    return (
+        "Actúa como un ingeniero senior redactando la descripcion de un Pull Request en GitHub. "
+        "Usa el diff y las métricas calculadas como contexto, pero no escribas un reporte "
+        "académico ni una lista exhaustiva de archivos. La descripcion debe ser util para "
+        "reviewers: clara, técnica, natural y de extension media.\n\n"
+        "Estructura la respuesta en Markdown con estas secciones exactas:\n\n"
+        "##(Título descriptivo de lo que se va a explicar a continuación)"
+        "Una introduccción directa que explica en 3 o 4 frases que problema resuelve el PR y cual es el resultado funcional.\n\n"
+        "## Implementación\n"
+        "Explica como se resolvió técnicamente. Agrupa los cambios por idea o componente, "
+        "no por archivo. Menciona archivos solo cuando ayuden a entender una decision importante.\n\n"
+        "## Actividad del cambio\n"
+        "Resume brevemente la rama origen y destino, volumen del cambio, autores involucrados, "
+        "dias con commits, aprovecha toda la información posible para detallar la actividad. Esta sección debe sonar natural, "
+        "no como una tabla de métricas.\n\n"
+        "Reglas:\n"
+        "- Los tildes son muy importantes, cuidá la ortografía.\n"
+        "- No inventes información que no este respaldada por el diff o las métricas.\n"
+        "- No incluyas saludos, cierres ni frases como 'Aquí esta el análisis'.\n"
+        "- No repitas todos los números si no aportan valor; usa las métricas para mejorar el contexto.\n"
+        "- Evita una lista archivo por archivo salvo que sea necesario para entender el cambio.\n"
+        "- No uses secciones llamadas 'Métricas del PR' ni 'Auditoria y actividad'.\n"
+        "- Devuelve únicamente la descripcion final del PR."
+    )
+
+
+def generar_descripcion_ia(diff_text, metricas_pr=None):
     """
     Toma el texto del Git Diff de GitHub y solicita a Gemini
     una descripción técnica estructurada en Markdown.
@@ -18,18 +47,7 @@ def generar_descripcion_ia(diff_text):
     """
     client = genai.Client()
 
-    prompt_sistema = (
-        "Actúa como un ingeniero de software experto que redacta descripciones técnicas "
-        "de Pull Requests en GitHub. Tu tarea es analizar el Git Diff provisto y generar "
-        "el resumen utilizando un TONO IMPERSONAL Y NEUTRO (por ejemplo: 'se hizo', "
-        "'se agregó', 'se modificó', 'se implementó'). "
-        "El estilo debe ser directo, conciso y profesional, típico de un desarrollador humano. "
-        "Estructura la respuesta directamente en formato Markdown usando las siguientes secciones:\n"
-        "1. Un breve resumen general (ej: 'En este Pull Request se implementó...').\n"
-        "2. Una lista con viñetas detallando los cambios específicos por archivo o componente.\n"
-        "Bajo ninguna circunstancia incluyas introducciones ni cierres como 'Aquí está el análisis', "
-        "'Saludos' o 'Espero que te sirva'. Devuelve únicamente el texto de la descripción."
-    )
+    prompt_sistema = _build_summary_prompt()
 
     modelo_configurado = os.environ.get("GEMINI_MODEL")
     lista_intentos = [modelo_configurado] if modelo_configurado else MODELOS_PREFERIDOS
@@ -39,7 +57,13 @@ def generar_descripcion_ia(diff_text):
     for modelo in lista_intentos:
         try:
             print(f"[IA Summary] Intentando generar contenido con el modelo: {modelo}...")
-            texto_markdown, error = _llamar_api_gemini(client, modelo, diff_text, prompt_sistema)
+            texto_markdown, error = _llamar_api_gemini(
+                client,
+                modelo,
+                diff_text,
+                prompt_sistema,
+                metricas_pr,
+            )
             return texto_markdown, None
         except Exception as e:
             ultimo_error = str(e)
@@ -56,7 +80,13 @@ def generar_descripcion_ia(diff_text):
     print(f"[IA Summary] Reintentando última oportunidad con el modelo principal: {modelo_principal}...")
 
     try:
-        texto_markdown, error = _llamar_api_gemini(client, modelo_principal, diff_text, prompt_sistema)
+        texto_markdown, error = _llamar_api_gemini(
+            client,
+            modelo_principal,
+            diff_text,
+            prompt_sistema,
+            metricas_pr,
+        )
         return texto_markdown, None
     except Exception as e:
         ultimo_error = str(e)
@@ -66,14 +96,20 @@ def generar_descripcion_ia(diff_text):
     return "", f"Saturación persistente en Google AI Studio. Último error: {ultimo_error}"
 
 
-def _llamar_api_gemini(client, modelo, diff_text, prompt_sistema):
+def _llamar_api_gemini(client, modelo, diff_text, prompt_sistema, metricas_pr=None):
     """
     Función auxiliar para hacer la petición limpia.
     Devuelve una tupla (texto, error) si tiene éxito, o levanta una excepción si falla.
     """
+    metricas_json = json.dumps(metricas_pr or {}, ensure_ascii=False, indent=2)
     response = client.models.generate_content(
         model=modelo,
-        contents=f"Por favor, analiza este Diff de Git y genera la descripción:\n\n{diff_text}",
+        contents=(
+            "Metricas calculadas del Pull Request:\n"
+            f"{metricas_json}\n\n"
+            "Diff de GitHub:\n"
+            f"{diff_text}"
+        ),
         config=types.GenerateContentConfig(
             system_instruction=prompt_sistema,
             temperature=0.3,

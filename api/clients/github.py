@@ -10,6 +10,7 @@ PULLS_URL = "https://api.github.com/repos/{owner}/{repo}/pulls"
 PULL_DETAIL_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
 PULL_FILES_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files"
 PULL_COMMITS_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/commits"
+COMMIT_DETAIL_URL = "https://api.github.com/repos/{owner}/{repo}/commits/{sha}"
 PULL_REVIEWS_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews"
 PULL_REVIEW_COMMENTS_URL = "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/comments"
 ISSUE_COMMENTS_URL = "https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments"
@@ -50,6 +51,11 @@ def get_json(access_token, url, params=None):
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     return response, response_data(response)
+
+
+def get_commit_detail(access_token, owner, repo, sha):
+    url = COMMIT_DETAIL_URL.format(owner=owner, repo=repo, sha=sha)
+    return get_json(access_token, url)
 
 
 def patch_json(access_token, url, payload):

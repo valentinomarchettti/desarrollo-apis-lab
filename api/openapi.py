@@ -419,11 +419,147 @@ class GeneratedSummaryRepositorySerializer(serializers.Serializer):
     )
 
 
+class PullRequestBranchMetricsSerializer(serializers.Serializer):
+    origen = serializers.CharField(
+        allow_blank=True,
+        allow_null=True,
+        help_text="Rama de origen desde la que se propone el cambio.",
+    )
+    destino = serializers.CharField(
+        allow_blank=True,
+        allow_null=True,
+        help_text="Rama base o destino hacia la que apunta el pull request.",
+    )
+
+
+class PullRequestFileMetricsSerializer(serializers.Serializer):
+    total_modificados = serializers.IntegerField(
+        help_text="Cantidad total de archivos modificados informada por GitHub o calculada desde el listado de archivos."
+    )
+    tests_modificados = serializers.IntegerField(
+        help_text="Cantidad de archivos identificados como tests dentro del pull request."
+    )
+    archivos_test = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Archivos de test detectados por la API a partir de sus rutas y nombres.",
+    )
+
+
+class PullRequestLineMetricsSerializer(serializers.Serializer):
+    agregadas = serializers.IntegerField(help_text="Lineas agregadas en el pull request.")
+    eliminadas = serializers.IntegerField(help_text="Lineas eliminadas en el pull request.")
+    balance_neto = serializers.IntegerField(
+        help_text="Diferencia entre lineas agregadas y eliminadas."
+    )
+
+
+class PullRequestActivityMetricsSerializer(serializers.Serializer):
+    primer_commit = serializers.DateField(
+        allow_null=True,
+        help_text="Primer dia con commits dentro del pull request.",
+    )
+    ultimo_commit = serializers.DateField(
+        allow_null=True,
+        help_text="Ultimo dia con commits dentro del pull request.",
+    )
+    dias_calendario = serializers.IntegerField(
+        help_text="Cantidad de dias calendario entre el primer y ultimo commit, incluyendo ambos extremos."
+    )
+    dias_con_commits = serializers.ListField(
+        child=serializers.DateField(),
+        help_text="Dias concretos en los que hubo commits dentro del pull request.",
+    )
+
+
+class PullRequestMetricAuthorSerializer(serializers.Serializer):
+    github_id = serializers.IntegerField(required=False, allow_null=True, help_text="ID del usuario en GitHub.")
+    github_login = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Usuario de GitHub asociado a la autoria, cuando GitHub lo informa.",
+    )
+    nombre = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Nombre declarado en el commit cuando no hay usuario de GitHub o como dato complementario.",
+    )
+    email = serializers.EmailField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Email declarado en el commit, cuando GitHub lo informa.",
+    )
+    html_url = serializers.URLField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="URL publica del perfil de GitHub, si esta disponible.",
+    )
+    fecha_creacion_pr = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="Dia en que se creo el pull request, usado para el autor principal.",
+    )
+    commits = serializers.IntegerField(
+        required=False,
+        help_text="Cantidad de commits asociados a este autor dentro de la metrica calculada.",
+    )
+    primer_commit = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="Primer dia con commits de este autor.",
+    )
+    ultimo_commit = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="Ultimo dia con commits de este autor.",
+    )
+    dias_con_commits = serializers.ListField(
+        child=serializers.DateField(),
+        required=False,
+        help_text="Dias en los que este autor tuvo commits dentro del pull request.",
+    )
+    archivos_test = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text="Archivos de test tocados por este autor, cuando corresponde.",
+    )
+
+
+class PullRequestAuthorshipMetricsSerializer(serializers.Serializer):
+    autor_pr = PullRequestMetricAuthorSerializer(
+        allow_null=True,
+        help_text="Autor principal del pull request segun GitHub.",
+    )
+    autores_commits = PullRequestMetricAuthorSerializer(
+        many=True,
+        help_text="Autores agrupados por commits realizados en el pull request.",
+    )
+    autores_tests = PullRequestMetricAuthorSerializer(
+        many=True,
+        help_text="Autores que tocaron archivos de test, calculados desde el detalle de cada commit.",
+    )
+
+
+class PullRequestMetricsSerializer(serializers.Serializer):
+    ramas = PullRequestBranchMetricsSerializer(help_text="Ramas involucradas en el pull request.")
+    archivos = PullRequestFileMetricsSerializer(help_text="Metricas de archivos modificados.")
+    lineas = PullRequestLineMetricsSerializer(help_text="Metricas de lineas agregadas y eliminadas.")
+    actividad = PullRequestActivityMetricsSerializer(help_text="Actividad temporal calculada desde los commits.")
+    autoria = PullRequestAuthorshipMetricsSerializer(help_text="Informacion de autoria y trabajo sobre tests.")
+
+
 class GeneratedSummaryResponseSerializer(serializers.Serializer):
     repositorio = GeneratedSummaryRepositorySerializer()
     pull_request = GeneratedSummaryPullRequestSerializer()
     summary_tecnico_ia = serializers.CharField(
-        help_text="Resumen técnico generado por Gemini a partir del diff del pull request."
+        help_text="Resumen técnico generado por Gemini a partir del diff y las metricas calculadas del pull request."
+    )
+    metricas_pr = PullRequestMetricsSerializer(
+        required=False,
+        help_text="Metricas calculadas desde GitHub para enriquecer el resumen tecnico.",
     )
     summary_tecnico_api_id = serializers.IntegerField(
         required=False,
