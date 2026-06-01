@@ -157,6 +157,10 @@ SPECTACULAR_SETTINGS = {
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
     "COMPONENT_SPLIT_REQUEST": True,
     "SCHEMA_PATH_PREFIX": r"/api/",
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "api.openapi.localize_redoc_schema",
+    ],
     "ENUM_NAME_OVERRIDES": {
         "PullRequestEstadoEnum": "api.models.PullRequest.ESTADO_CHOICES",
         "SummaryTecnicoEstadoEnum": "api.models.SummaryTecnico.ESTADO_CHOICES",

@@ -569,3 +569,119 @@ class GeneratedSummaryResponseSerializer(serializers.Serializer):
         required=False,
         help_text="Respuesta resumida de GitHub después de actualizar la descripción del PR.",
     )
+
+
+REDOC_TEXT_REPLACEMENTS = (
+    ("Which field to use when ordering the results.", "Campo usado para ordenar los resultados."),
+    ("A page number within the paginated result set.", "Número de página dentro del resultado paginado."),
+    ("Number of results to return per page.", "Cantidad de resultados a devolver por página."),
+    ("A search term.", "Término de búsqueda."),
+    ("No response body", "Sin cuerpo de respuesta."),
+    ("API de Revisión Técnica de Pull Requests", "API de Revisión Técnica de PRs"),
+    ("Refresh token", "Token de renovación"),
+    ("Nuevo access token", "Nuevo token de acceso"),
+    ("access token", "token de acceso"),
+    ("header `Authorization", "encabezado `Authorization"),
+    ("Endpoints", "Puntos de entrada"),
+    ("endpoints", "puntos de entrada"),
+    ("endpoint", "punto de entrada"),
+    (" de summary", " de resumen"),
+    ("Scopes concedidos", "Permisos concedidos"),
+    ("scopes", "permisos"),
+    ("scope", "permiso"),
+    ("backend", "servidor"),
+    ("en el request y nunca", "en la solicitud y nunca"),
+    ("* `open` - Open", "* `open` - Abierto"),
+    ("* `closed` - Closed", "* `closed` - Cerrado"),
+    ("* `merged` - Merged", "* `merged` - Fusionado"),
+    ("* `pending` - Pending", "* `pending` - Pendiente"),
+    ("* `generated` - Generated", "* `generated` - Generado"),
+    ("* `failed` - Failed", "* `failed` - Fallido"),
+    ("GitHub Pull Requests", "GitHub PRs"),
+    ("Pull Requests locales", "PRs locales"),
+    ("Pull Requests", "PRs"),
+    ("pull requests", "PRs"),
+    ("Pull request", "PR"),
+    ("pull request", "PR"),
+    ("Owner u organización", "Propietario u organización"),
+    ("Reviewers", "Revisores"),
+    ("reviewers", "revisores"),
+    ("reviews", "revisiones"),
+    ("review", "revisión"),
+    ("request protegida", "solicitud protegida"),
+    ("request y nunca", "solicitud y nunca"),
+)
+
+
+def localize_redoc_schema(result, generator, request, public):
+    """Ajusta solo los textos visibles del schema OpenAPI que renderiza ReDoc."""
+    _remove_search_parameters(result)
+    _describe_empty_responses(result)
+    _localize_schema_text(result)
+    return result
+
+
+def _remove_search_parameters(value):
+    if isinstance(value, dict):
+        parameters = value.get("parameters")
+        if isinstance(parameters, list):
+            value["parameters"] = [
+                parameter
+                for parameter in parameters
+                if not (
+                    isinstance(parameter, dict)
+                    and parameter.get("in") == "query"
+                    and parameter.get("name") == "search"
+                )
+            ]
+        for child in value.values():
+            _remove_search_parameters(child)
+    elif isinstance(value, list):
+        for child in value:
+            _remove_search_parameters(child)
+
+
+def _describe_empty_responses(value):
+    if isinstance(value, dict):
+        responses = value.get("responses")
+        if isinstance(responses, dict):
+            for response in responses.values():
+                if not isinstance(response, dict):
+                    continue
+                if response.get("content"):
+                    continue
+                if response.get("description") in {None, "", "No response body"}:
+                    response["description"] = "Sin cuerpo de respuesta."
+        for child in value.values():
+            _describe_empty_responses(child)
+    elif isinstance(value, list):
+        for child in value:
+            _describe_empty_responses(child)
+
+
+def _localize_schema_text(value, parent_key=None):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"description", "summary", "title"} and isinstance(child, str):
+                value[key] = _localize_text(child)
+            elif key == "tags" and isinstance(child, list):
+                value[key] = [
+                    _localize_text(item) if isinstance(item, str) else item
+                    for item in child
+                ]
+                for item in value[key]:
+                    _localize_schema_text(item, key)
+            elif key == "name" and parent_key == "tags" and isinstance(child, str):
+                value[key] = _localize_text(child)
+            else:
+                _localize_schema_text(child, key)
+    elif isinstance(value, list):
+        for child in value:
+            _localize_schema_text(child, parent_key)
+
+
+def _localize_text(text):
+    localized = text
+    for source, target in REDOC_TEXT_REPLACEMENTS:
+        localized = localized.replace(source, target)
+    return localized
