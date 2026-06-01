@@ -166,13 +166,27 @@ Content-Type: application/json
 - `GET/POST /api/summaries/`: listado para todos los roles; creacion para `Administrador` o `Reviewer`.
 - `GET/PUT/PATCH/DELETE /api/summaries/{id}/`: lectura para todos los roles; modificacion para `Administrador` o `Reviewer`; eliminacion solo para `Administrador`.
 
+### Filtros, ordenamiento y paginacion
+
+Los listados CRUD locales usan paginacion por defecto con `page` y `page_size`, mas filtros puntuales con `django-filter` y ordenamiento con `ordering` cuando aporta a la consulta.
+
+Ejemplos:
+
+- `GET /api/repositorios/?github_owner=vale&github_repo=lab&activo=true&page_size=5`
+- `GET /api/repositorios/?ordering=github_owner,github_repo`
+- `GET /api/pull-requests/?estado=open&titulo=filtros`
+- `GET /api/pull-requests/?autor_github=valen&rama_destino=main&ordering=-created_at`
+- `GET /api/summaries/?estado=generated&pull_request=1`
+
+En repositorios, `github_owner` y `github_repo` usan busqueda parcial (`icontains`). En pull requests, la busqueda textual queda explicita en `titulo`, `autor_github` y `rama_destino`, tambien con coincidencia parcial.
+
 ## Endpoints GitHub
 
 - `GET /api/github/connect/`: redirige a GitHub para autorizar la API. Requiere rol `Administrador`.
 - `GET /api/github/oauth/callback/`: callback OAuth de GitHub; guarda o actualiza la `GitHubConnection` activa.
 - `GET /api/github/oauth/link/`: devuelve el link OAuth como JSON para pruebas manuales. Requiere rol `Administrador`.
 - `GET /api/github/repositorios/`: lista repositorios usando la `GitHubConnection` activa.
-- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/?state=all`: lista pull requests usando la `GitHubConnection` activa. El parametro `state` puede ser `open`, `closed` o `all`.
+- `GET /api/github/repositorios/{owner}/{repo}/pull-requests/?state=all`: lista pull requests usando la `GitHubConnection` activa. El parametro `state` puede ser `open`, `closed` o `all`. Tambien acepta `estado`, `numero`, `titulo`, `autor_github`, `rama_destino` y `ordering`.
 - `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/`: devuelve el detalle completo del pull request, incluyendo datos generales, archivos modificados, commits, comentarios, reviews, comentarios de codigo, diff y summary tecnico generado por IA cuando corresponde.
 - `GET /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera un summary tecnico del PR sin modificar GitHub. Ademas del diff, consulta detalle, archivos y commits para devolver `metricas_pr`. Requiere rol `Reviewer` o `Administrador`.
 - `POST /api/github/repositorios/{owner}/{repo}/pull-requests/{number}/summary/`: genera el mismo summary tecnico enriquecido con `metricas_pr`, lo publica como descripcion del PR en GitHub y guarda el repositorio, pull request y summary en la API local. Requiere rol `Reviewer` o `Administrador`.
