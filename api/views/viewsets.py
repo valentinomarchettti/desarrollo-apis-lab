@@ -1,6 +1,11 @@
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, extend_schema_view
 from rest_framework import viewsets
 
+from api.filters import (
+    PullRequestFilter,
+    RepositorioFilter,
+    SummaryTecnicoFilter,
+)
 from api.models import GitHubConnection, PullRequest, Repositorio, SummaryTecnico
 from api.permissions import ViewDjangoModelPermissions
 from api.serializers import (
@@ -126,6 +131,9 @@ class RepositorioViewSet(viewsets.ModelViewSet):
     queryset = Repositorio.objects.all()
     serializer_class = RepositorioSerializer
     permission_classes = [ViewDjangoModelPermissions]
+    filterset_class = RepositorioFilter
+    ordering_fields = ["github_owner", "github_repo", "activo"]
+    ordering = ["github_owner", "github_repo"]
 
 
 @extend_schema_view(
@@ -184,6 +192,8 @@ class GitHubConnectionViewSet(viewsets.ModelViewSet):
     queryset = GitHubConnection.objects.all()
     serializer_class = GitHubConnectionSerializer
     permission_classes = [ViewDjangoModelPermissions]
+    ordering_fields = []
+    ordering = ["-updated_at", "-id"]
 
 
 @extend_schema_view(
@@ -240,6 +250,13 @@ class PullRequestViewSet(viewsets.ModelViewSet):
     queryset = PullRequest.objects.all()
     serializer_class = PullRequestSerializer
     permission_classes = [ViewDjangoModelPermissions]
+    filterset_class = PullRequestFilter
+    ordering_fields = [
+        "numero",
+        "created_at",
+        "updated_at",
+    ]
+    ordering = ["-created_at", "-id"]
 
 
 @extend_schema_view(
@@ -297,3 +314,6 @@ class SummaryTecnicoViewSet(viewsets.ModelViewSet):
     queryset = SummaryTecnico.objects.all()
     serializer_class = SummaryTecnicoSerializer
     permission_classes = [ViewDjangoModelPermissions]
+    filterset_class = SummaryTecnicoFilter
+    ordering_fields = []
+    ordering = ["-created_at", "-id"]

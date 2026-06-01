@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from api.clients import github as github_client
+from api.filters import filter_github_pull_requests
 from api.openapi import (
     ErrorResponseSerializer,
     GitHubPullRequestListResponseSerializer,
@@ -115,6 +116,52 @@ def github_repositories(request):
             required=False,
             description="Estado de los pull requests a consultar. Por defecto: `all`.",
         ),
+        OpenApiParameter(
+            name="estado",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            enum=["open", "closed", "merged"],
+            required=False,
+            description="Estado normalizado del pull request devuelto por la API.",
+        ),
+        OpenApiParameter(
+            name="numero",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Numero exacto del pull request.",
+        ),
+        OpenApiParameter(
+            name="titulo",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Busqueda parcial por titulo del pull request.",
+        ),
+        OpenApiParameter(
+            name="autor_github",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Busqueda parcial por usuario autor del pull request.",
+        ),
+        OpenApiParameter(
+            name="rama_destino",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Busqueda parcial por rama destino.",
+        ),
+        OpenApiParameter(
+            name="ordering",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description=(
+                "Ordenamiento por numero, created_at o updated_at. Usa `-` "
+                "para descendente."
+            ),
+        ),
     ],
     responses={
         status.HTTP_200_OK: GitHubPullRequestListResponseSerializer,
@@ -176,6 +223,12 @@ def github_repository_pull_requests(request, owner, repo):
         pull_requests_data,
         get_local_pull_requests_by_number(local_repository),
     )
+    pull_requests, filter_error = filter_github_pull_requests(
+        pull_requests,
+        request.query_params,
+    )
+    if filter_error:
+        return Response(filter_error, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(
         {
