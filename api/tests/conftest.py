@@ -21,8 +21,10 @@ def authenticated_client(api_client, user):
 def repo_base(db):
     # Creamos un repositorio necesario para relacionar el Pull Request
     return Repositorio.objects.create(
+        nombre="Repo Test",
         github_owner="usuario",
-        github_repo="repo"
+        github_repo="repo",
+        url="https://github.com/usuario/repo",
     )
 
 @pytest.fixture
@@ -31,5 +33,7 @@ def pr_base(db, repo_base):
     return PullRequest.objects.create(
         repositorio=repo_base,
         numero=123,
-        titulo="PR Test"
+        titulo="PR Test",
+        estado="open",
+        url="https://github.com/usuario/repo/pull/123",
     )
