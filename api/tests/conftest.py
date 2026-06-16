@@ -24,3 +24,12 @@ def repo_base(db):
         github_owner="usuario",
         github_repo="repo"
     )
+
+@pytest.fixture
+def pr_base(db, repo_base):
+    from api.models import PullRequest
+    return PullRequest.objects.create(
+        repositorio=repo_base,
+        numero=123,
+        titulo="PR Test"
+    )
