@@ -4,7 +4,7 @@ from api.models import PullRequest
 
 
 @pytest.mark.django_db
-def test_crud_pull_request(authenticated_client, repo_base):
+def test_pull_request_crud_crea_lee_actualiza_y_elimina(authenticated_client, repo_base):
     """
     Test completo del ciclo CRUD para el modelo PullRequest.
     - Utiliza 'authenticated_client' para evitar el error 401.

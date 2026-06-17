@@ -7,7 +7,7 @@ from api.filters import filter_github_pull_requests
 # --- 1. TEST DE FILTROS DE BASE DE DATOS (Django Filter) ---
 
 @pytest.mark.django_db
-def test_pull_request_filter_estado(authenticated_client, repo_base):
+def test_pull_request_list_filtra_por_estado(authenticated_client, repo_base):
     """Verifica que el filtro de estado funcione en el endpoint (paginado)."""
     # Limpiamos PRs previos para asegurar independencia
     PullRequest.objects.all().delete()
@@ -26,7 +26,7 @@ def test_pull_request_filter_estado(authenticated_client, repo_base):
 
 # --- 2. TEST DE LÓGICA MANUAL (función filter_github_pull_requests) ---
 
-def test_filter_github_pull_requests_manual():
+def test_filter_github_pull_requests_filtra_por_estado_y_rechaza_estado_invalido():
     """Valida la lógica de filtrado manual de PRs externos (sin DB)."""
     prs = [
         {"numero": 1, "estado": "open", "titulo": "Feature A"},

@@ -11,7 +11,7 @@ from api.serializers import (
 class TestSerializersValidations:
 
     # --- TESTS DE GITHUB CONNECTION ---
-    def test_github_connection_temporal_validation(self):
+    def test_github_connection_rechaza_last_used_at_anterior_a_connected_at(self):
         """Valida que last_used_at no sea anterior a connected_at."""
         # Se incluyen campos dummy para cumplir con requisitos del modelo
         data = {
